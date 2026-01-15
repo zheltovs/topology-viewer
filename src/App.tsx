@@ -103,6 +103,15 @@ function App() {
     updateHistoryState();
   }, [shapes, commandHistory, updateHistoryState]);
 
+  // Change shape color
+  const handleChangeColor = useCallback((shapeId: string, color: string) => {
+    const shape = shapes.find(s => s.id === shapeId);
+    if (shape) {
+      shape.color = color;
+      setShapes([...shapes]);
+    }
+  }, [shapes]);
+
   // Handle import from file
   const handleImport = useCallback(() => {
     const input = document.createElement('input');
@@ -193,6 +202,7 @@ function App() {
           onToggleVisibility={handleToggleVisibility}
           onSelectShape={handleSelectShape}
           onDeleteShape={handleDeleteShape}
+          onChangeColor={handleChangeColor}
         />
       </div>
     </div>
