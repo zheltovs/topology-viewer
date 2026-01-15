@@ -1,4 +1,5 @@
 import React from 'react';
+import { tokens } from '../styles';
 
 interface ToolbarProps {
   drawingMode: 'chain' | 'contour' | null;
@@ -9,6 +10,46 @@ interface ToolbarProps {
   onUndo: () => void;
   onRedo: () => void;
 }
+
+// Icon components for clean, modern look
+const ChainIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 20L8 12L12 16L16 8L20 4" />
+    <circle cx="4" cy="20" r="2" fill="currentColor" />
+    <circle cx="8" cy="12" r="2" fill="currentColor" />
+    <circle cx="12" cy="16" r="2" fill="currentColor" />
+    <circle cx="16" cy="8" r="2" fill="currentColor" />
+    <circle cx="20" cy="4" r="2" fill="currentColor" />
+  </svg>
+);
+
+const ContourIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="12,2 22,8.5 22,15.5 12,22 2,15.5 2,8.5" />
+  </svg>
+);
+
+const UndoIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 7v6h6" />
+    <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+  </svg>
+);
+
+const RedoIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 7v6h-6" />
+    <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
+  </svg>
+);
+
+const ImportIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7,10 12,15 17,10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+);
 
 export const Toolbar: React.FC<ToolbarProps> = ({
   drawingMode,
@@ -21,76 +62,107 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 }) => {
   return (
     <div style={styles.toolbar}>
-      <div style={styles.section}>
-        <button
-          style={{
-            ...styles.button,
-            ...(drawingMode === 'chain' ? styles.buttonActive : {})
-          }}
-          onClick={() => onSetDrawingMode(drawingMode === 'chain' ? null : 'chain')}
-          title="Draw Chain (Ctrl+1)"
-        >
-          📏 Chain
-        </button>
-
-        <button
-          style={{
-            ...styles.button,
-            ...(drawingMode === 'contour' ? styles.buttonActive : {})
-          }}
-          onClick={() => onSetDrawingMode(drawingMode === 'contour' ? null : 'contour')}
-          title="Draw Contour (Ctrl+2) - Press Esc to finish"
-        >
-          ⬡ Contour
-        </button>
+      {/* Logo / Brand */}
+      <div style={styles.brand}>
+        <div style={styles.logo}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L2 7v10l10 5 10-5V7L12 2z" stroke={tokens.colors.accent.primary} strokeWidth="2" fill="none"/>
+            <path d="M12 22V12" stroke={tokens.colors.accent.primary} strokeWidth="2"/>
+            <path d="M2 7l10 5 10-5" stroke={tokens.colors.accent.primary} strokeWidth="2"/>
+          </svg>
+        </div>
+        <span style={styles.brandText}>Topology Viewer</span>
       </div>
 
-      <div style={styles.separator}></div>
+      <div style={styles.divider} />
 
-      <div style={styles.section}>
-        <button
-          style={{
-            ...styles.button,
-            ...(canUndo ? {} : styles.buttonDisabled)
-          }}
-          onClick={onUndo}
-          disabled={!canUndo}
-          title="Undo (Ctrl+Z)"
-        >
-          ↶ Undo
-        </button>
+      {/* Drawing Tools */}
+      <div style={styles.toolGroup}>
+        <span style={styles.groupLabel}>Draw</span>
+        <div style={styles.buttonGroup}>
+          <button
+            style={{
+              ...styles.button,
+              ...(drawingMode === 'chain' ? styles.buttonActive : {})
+            }}
+            onClick={() => onSetDrawingMode(drawingMode === 'chain' ? null : 'chain')}
+            title="Draw Chain (Ctrl+1)"
+          >
+            <ChainIcon />
+            <span>Chain</span>
+          </button>
 
-        <button
-          style={{
-            ...styles.button,
-            ...(canRedo ? {} : styles.buttonDisabled)
-          }}
-          onClick={onRedo}
-          disabled={!canRedo}
-          title="Redo (Ctrl+Y)"
-        >
-          ↷ Redo
-        </button>
+          <button
+            style={{
+              ...styles.button,
+              ...(drawingMode === 'contour' ? styles.buttonActiveContour : {})
+            }}
+            onClick={() => onSetDrawingMode(drawingMode === 'contour' ? null : 'contour')}
+            title="Draw Contour (Ctrl+2)"
+          >
+            <ContourIcon />
+            <span>Contour</span>
+          </button>
+        </div>
       </div>
 
-      <div style={styles.separator}></div>
+      <div style={styles.divider} />
 
-      <div style={styles.section}>
+      {/* History */}
+      <div style={styles.toolGroup}>
+        <span style={styles.groupLabel}>History</span>
+        <div style={styles.buttonGroup}>
+          <button
+            style={{
+              ...styles.iconButton,
+              ...(canUndo ? {} : styles.buttonDisabled)
+            }}
+            onClick={onUndo}
+            disabled={!canUndo}
+            title="Undo (Ctrl+Z)"
+          >
+            <UndoIcon />
+          </button>
+
+          <button
+            style={{
+              ...styles.iconButton,
+              ...(canRedo ? {} : styles.buttonDisabled)
+            }}
+            onClick={onRedo}
+            disabled={!canRedo}
+            title="Redo (Ctrl+Y)"
+          >
+            <RedoIcon />
+          </button>
+        </div>
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Import */}
+      <div style={styles.toolGroup}>
+        <span style={styles.groupLabel}>File</span>
         <button
           style={styles.button}
           onClick={onImport}
           title="Import from file"
         >
-          📥 Import
+          <ImportIcon />
+          <span>Import</span>
         </button>
       </div>
 
-      <div style={styles.info}>
-        {drawingMode === 'contour' && (
-          <span>💡 Click to add points, press <kbd>Esc</kbd> to finish contour</span>
-        )}
-        {drawingMode === 'chain' && (
-          <span>💡 Click to add points, press <kbd>Esc</kbd> to finish</span>
+      {/* Status / Hints */}
+      <div style={styles.statusArea}>
+        {drawingMode && (
+          <div style={styles.hint}>
+            <div style={styles.hintDot} />
+            <span>
+              Click to add points • Press <kbd>Esc</kbd> to finish
+              {drawingMode === 'contour' && ' (auto-close)'}
+            </span>
+          </div>
         )}
       </div>
     </div>
@@ -99,51 +171,118 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
 const styles: { [key: string]: React.CSSProperties } = {
   toolbar: {
-    height: '56px',
-    backgroundColor: '#fff',
-    borderBottom: '1px solid #ddd',
+    height: tokens.components.toolbar.height,
+    backgroundColor: tokens.colors.bg.secondary,
+    borderBottom: `1px solid ${tokens.colors.border.subtle}`,
     display: 'flex',
     alignItems: 'center',
-    padding: '0 16px',
-    gap: '12px',
-    fontFamily: 'system-ui, -apple-system, sans-serif'
+    padding: `0 ${tokens.spacing.md}`,
+    gap: tokens.spacing.md,
+    fontFamily: tokens.typography.fontFamily.sans,
   },
-  section: {
+  brand: {
     display: 'flex',
-    gap: '8px'
+    alignItems: 'center',
+    gap: tokens.spacing.sm,
   },
-  separator: {
+  logo: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  brandText: {
+    fontSize: tokens.typography.fontSize.md,
+    fontWeight: tokens.typography.fontWeight.semibold,
+    color: tokens.colors.text.primary,
+    letterSpacing: '-0.02em',
+  },
+  divider: {
     width: '1px',
-    height: '32px',
-    backgroundColor: '#ddd'
+    height: '16px',
+    backgroundColor: tokens.colors.border.subtle,
+    margin: '0 4px',
+  },
+  toolGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacing.xs,
+  },
+  groupLabel: {
+    display: 'none',
+  },
+  buttonGroup: {
+    display: 'flex',
+    gap: tokens.spacing.xs,
   },
   button: {
-    padding: '8px 16px',
-    backgroundColor: '#fff',
-    border: '1px solid #ddd',
-    borderRadius: '6px',
-    cursor: 'pointer',
-    fontSize: '14px',
-    fontWeight: '500',
-    transition: 'all 0.2s',
     display: 'flex',
     alignItems: 'center',
-    gap: '6px'
+    gap: '4px',
+    padding: '4px 8px',
+    height: tokens.components.button.height.md,
+    backgroundColor: 'transparent',
+    border: `1px solid ${tokens.colors.border.default}`,
+    borderRadius: '4px',
+    color: tokens.colors.text.secondary,
+    fontSize: '11px',
+    fontWeight: tokens.typography.fontWeight.medium,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    transition: `all ${tokens.transitions.normal}`,
+    outline: 'none',
+  },
+  iconButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: tokens.components.button.height.md,
+    height: tokens.components.button.height.md,
+    backgroundColor: 'transparent',
+    border: `1px solid ${tokens.colors.border.default}`,
+    borderRadius: '4px',
+    color: tokens.colors.text.secondary,
+    cursor: 'pointer',
+    transition: `all ${tokens.transitions.normal}`,
+    outline: 'none',
   },
   buttonActive: {
-    backgroundColor: '#2196f3',
-    color: '#fff',
-    borderColor: '#2196f3'
+    backgroundColor: tokens.colors.accent.primary,
+    borderColor: tokens.colors.accent.primary,
+    color: tokens.colors.text.primary,
+    boxShadow: tokens.shadows.glow.primary,
+  },
+  buttonActiveContour: {
+    backgroundColor: tokens.colors.accent.success,
+    borderColor: tokens.colors.accent.success,
+    color: tokens.colors.text.primary,
+    boxShadow: tokens.shadows.glow.success,
   },
   buttonDisabled: {
-    opacity: 0.4,
-    cursor: 'not-allowed'
+    opacity: 0.35,
+    cursor: 'not-allowed',
+    pointerEvents: 'none' as const,
   },
-  info: {
+  statusArea: {
     marginLeft: 'auto',
-    fontSize: '13px',
-    color: '#666',
     display: 'flex',
-    alignItems: 'center'
-  }
+    alignItems: 'center',
+  },
+  hint: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacing.sm,
+    padding: `${tokens.spacing.sm} ${tokens.spacing.md}`,
+    backgroundColor: tokens.colors.bg.tertiary,
+    borderRadius: tokens.radius.md,
+    fontSize: tokens.typography.fontSize.sm,
+    color: tokens.colors.text.secondary,
+  },
+  hintDot: {
+    width: '6px',
+    height: '6px',
+    borderRadius: '50%',
+    backgroundColor: tokens.colors.accent.danger,
+    animation: 'pulse 2s infinite',
+  },
 };
+

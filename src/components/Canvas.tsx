@@ -1,6 +1,28 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import type { Shape } from '../models';
 import { Point, ShapeType } from '../models';
+import { tokens } from '../styles';
+
+// Dark theme canvas colors
+const canvasColors = {
+  background: '#0a0e13',
+  grid: 'rgba(255, 255, 255, 0.04)',
+  gridMajor: 'rgba(255, 255, 255, 0.08)',
+  axis: 'rgba(255, 255, 255, 0.25)',
+  axisLabel: '#6e767d',
+  origin: '#1d9bf0',
+  chain: '#1d9bf0',
+  chainFill: 'rgba(29, 155, 240, 0.08)',
+  contour: '#00ba7c',
+  contourFill: 'rgba(0, 186, 124, 0.15)',
+  selected: '#ffad1f',
+  selectedFill: 'rgba(255, 173, 31, 0.15)',
+  drawing: '#f4212e',
+  drawingFill: 'rgba(244, 33, 46, 0.15)',
+  cursor: '#f4212e',
+  cursorLabel: '#f7f9f9',
+  point: '#f7f9f9',
+};
 
 interface CanvasProps {
   shapes: Shape[];
@@ -168,7 +190,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     canvas.height = canvas.offsetHeight;
 
     // Clear canvas
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = canvasColors.background;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Save context
@@ -199,82 +221,152 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [shapes, transform, tempPoints, drawingMode, mouseWorldPos, worldToScreen]);
 
   const drawGrid = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
-    ctx.strokeStyle = '#e0e0e0';
+    // Calculate grid spacing based on scale - use fixed world units
+    // Choose nice round numbers: 1, 2, 5, 10, 20, 50, 100, etc.
+    const targetPixelSpacing = 100; // target pixel spacing between grid lines
+    const rawWorldSpacing = targetPixelSpacing / transform.scale;
+    
+    // Round to nice numbers (1, 2, 5, 10, 20, 50, etc.)
+    const magnitude = Math.pow(10, Math.floor(Math.log10(rawWorldSpacing)));
+    const normalized = rawWorldSpacing / magnitude;
+    let niceNumber: number;
+    if (normalized < 1.5) niceNumber = 1;
+    else if (normalized < 3.5) niceNumber = 2;
+    else if (normalized < 7.5) niceNumber = 5;
+    else niceNumber = 10;
+    
+    const worldSpacing = niceNumber * magnitude;
+    
+    // Calculate world origin in screen coordinates
+    const originScreen = worldToScreen(0, 0);
+
+    // Draw minor grid lines - aligned to world coordinates
+    ctx.strokeStyle = canvasColors.grid;
     ctx.lineWidth = 1;
-    ctx.font = '10px monospace';
-    ctx.fillStyle = '#666';
 
-    // Calculate grid spacing based on scale
-    const baseSpacing = 50; // pixels
-    const worldSpacing = Math.pow(10, Math.floor(Math.log10(baseSpacing / transform.scale)));
-    const screenSpacing = worldSpacing * transform.scale;
+    // Calculate grid line positions based on world coordinates
+    const worldLeft = -transform.offsetX / transform.scale - width / 2 / transform.scale;
+    const worldRight = worldLeft + width / transform.scale;
+    const worldTop = transform.offsetY / transform.scale + height / 2 / transform.scale;
+    const worldBottom = worldTop - height / transform.scale;
 
-    // Draw vertical grid lines
-    const centerX = width / 2 + transform.offsetX;
-    const startX = Math.floor((-centerX) / screenSpacing) * screenSpacing + centerX;
-
-    for (let x = startX; x < width; x += screenSpacing) {
-      const worldX = (x - centerX) / transform.scale;
-
+    // Vertical lines (X grid)
+    const startWorldX = Math.floor(worldLeft / worldSpacing) * worldSpacing;
+    for (let wx = startWorldX; wx <= worldRight; wx += worldSpacing) {
+      const screenX = originScreen.x + wx * transform.scale;
       ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, height);
+      ctx.moveTo(screenX, 0);
+      ctx.lineTo(screenX, height);
       ctx.stroke();
-
-      // Draw label
-      if (Math.abs(worldX) > 0.001 || Math.abs(x - centerX) > 5) {
-        ctx.fillText(worldX.toFixed(2), x + 2, height / 2 + transform.offsetY + 12);
-      }
     }
 
-    // Draw horizontal grid lines
-    const centerY = height / 2 + transform.offsetY;
-    const startY = Math.floor((-centerY) / screenSpacing) * screenSpacing + centerY;
-
-    for (let y = startY; y < height; y += screenSpacing) {
-      const worldY = -(y - centerY) / transform.scale;
-
+    // Horizontal lines (Y grid)
+    const startWorldY = Math.floor(worldBottom / worldSpacing) * worldSpacing;
+    for (let wy = startWorldY; wy <= worldTop; wy += worldSpacing) {
+      const screenY = originScreen.y - wy * transform.scale;
       ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(width, y);
+      ctx.moveTo(0, screenY);
+      ctx.lineTo(width, screenY);
       ctx.stroke();
-
-      // Draw label
-      if (Math.abs(worldY) > 0.001 || Math.abs(y - centerY) > 5) {
-        ctx.fillText(worldY.toFixed(2), width / 2 + transform.offsetX + 5, y - 2);
-      }
     }
 
     // Draw axes
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = canvasColors.axis;
+    ctx.lineWidth = 1.5;
 
-    // X-axis
-    ctx.beginPath();
-    ctx.moveTo(0, centerY);
-    ctx.lineTo(width, centerY);
-    ctx.stroke();
+    // X-axis (only if visible)
+    if (originScreen.y >= 0 && originScreen.y <= height) {
+      ctx.beginPath();
+      ctx.moveTo(0, originScreen.y);
+      ctx.lineTo(width, originScreen.y);
+      ctx.stroke();
+    }
 
-    // Y-axis
-    ctx.beginPath();
-    ctx.moveTo(centerX, 0);
-    ctx.lineTo(centerX, height);
-    ctx.stroke();
+    // Y-axis (only if visible)
+    if (originScreen.x >= 0 && originScreen.x <= width) {
+      ctx.beginPath();
+      ctx.moveTo(originScreen.x, 0);
+      ctx.lineTo(originScreen.x, height);
+      ctx.stroke();
+    }
 
-    // Draw origin
-    ctx.fillStyle = '#333';
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillText('(0, 0)', centerX + 5, centerY - 5);
+    // Draw axis labels - at grid intersections
+    ctx.font = `500 12px ${tokens.typography.fontFamily.mono}`;
+    ctx.fillStyle = canvasColors.axisLabel;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+
+    // Determine decimal places based on world spacing
+    const decimals = worldSpacing < 1 ? Math.ceil(-Math.log10(worldSpacing)) : 0;
+
+    // X-axis labels
+    for (let wx = startWorldX; wx <= worldRight; wx += worldSpacing) {
+      if (Math.abs(wx) < worldSpacing * 0.01) continue; // Skip origin
+      const screenX = originScreen.x + wx * transform.scale;
+      if (screenX < 10 || screenX > width - 40) continue; // Avoid edge clipping
+      
+      const label = wx.toFixed(decimals);
+      const labelY = Math.min(Math.max(originScreen.y + 6, 6), height - 16);
+      ctx.fillText(label, screenX + 4, labelY);
+    }
+
+    // Y-axis labels
+    ctx.textAlign = 'left';
+    for (let wy = startWorldY; wy <= worldTop; wy += worldSpacing) {
+      if (Math.abs(wy) < worldSpacing * 0.01) continue; // Skip origin
+      const screenY = originScreen.y - wy * transform.scale;
+      if (screenY < 16 || screenY > height - 10) continue; // Avoid edge clipping
+      
+      const label = wy.toFixed(decimals);
+      const labelX = Math.min(Math.max(originScreen.x + 6, 6), width - 50);
+      ctx.fillText(label, labelX, screenY - 6);
+    }
+
+    // Draw origin point (if visible)
+    if (originScreen.x >= -10 && originScreen.x <= width + 10 && 
+        originScreen.y >= -10 && originScreen.y <= height + 10) {
+      ctx.fillStyle = canvasColors.origin;
+      ctx.beginPath();
+      ctx.arc(originScreen.x, originScreen.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Origin label
+      ctx.fillText('0', originScreen.x + 6, originScreen.y + 6);
+    }
+  };
+
+  // Helper to create fill color from stroke color
+  const colorToFill = (color: string, alpha: number = 0.15): string => {
+    // Handle hex colors
+    if (color.startsWith('#')) {
+      const hex = color.slice(1);
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+    return color;
   };
 
   const drawShape = (ctx: CanvasRenderingContext2D, shape: Shape) => {
     if (shape.points.length < 2) return;
 
-    ctx.strokeStyle = shape.selected ? '#ff0000' : '#0066cc';
-    ctx.lineWidth = shape.selected ? 3 : 2;
-    ctx.fillStyle = shape.type === ShapeType.CONTOUR ? 'rgba(0, 102, 204, 0.1)' : 'transparent';
+    const isContour = shape.type === ShapeType.CONTOUR;
+    const isSelected = shape.selected;
+    const shapeColor = shape.color;
+
+    // Set colors based on shape color and selection state
+    if (isSelected) {
+      ctx.strokeStyle = canvasColors.selected;
+      ctx.fillStyle = canvasColors.selectedFill;
+    } else {
+      ctx.strokeStyle = shapeColor;
+      ctx.fillStyle = isContour ? colorToFill(shapeColor, 0.12) : 'transparent';
+    }
+
+    ctx.lineWidth = isSelected ? 2.5 : 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
 
     ctx.beginPath();
     const firstPoint = worldToScreen(shape.points[0].x, shape.points[0].y);
@@ -285,19 +377,35 @@ export const Canvas: React.FC<CanvasProps> = ({
       ctx.lineTo(point.x, point.y);
     }
 
-    if (shape.type === ShapeType.CONTOUR) {
+    if (isContour) {
       ctx.closePath();
       ctx.fill();
     }
 
     ctx.stroke();
 
-    // Draw points
-    ctx.fillStyle = shape.selected ? '#ff0000' : '#0066cc';
+    // Draw points with glow effect for selected
     shape.points.forEach((point) => {
       const screenPoint = worldToScreen(point.x, point.y);
+
+      if (isSelected) {
+        // Outer glow
+        ctx.fillStyle = canvasColors.selectedFill;
+        ctx.beginPath();
+        ctx.arc(screenPoint.x, screenPoint.y, 8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Main point
+      ctx.fillStyle = isSelected ? canvasColors.selected : shapeColor;
       ctx.beginPath();
       ctx.arc(screenPoint.x, screenPoint.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Inner highlight
+      ctx.fillStyle = canvasColors.point;
+      ctx.beginPath();
+      ctx.arc(screenPoint.x, screenPoint.y, 1.5, 0, Math.PI * 2);
       ctx.fill();
     });
   };
@@ -305,9 +413,12 @@ export const Canvas: React.FC<CanvasProps> = ({
   const drawTempShape = (ctx: CanvasRenderingContext2D, points: Point[], isContour: boolean) => {
     if (points.length === 0) return;
 
-    ctx.strokeStyle = '#ff6600';
+    ctx.strokeStyle = canvasColors.drawing;
+    ctx.fillStyle = canvasColors.drawingFill;
     ctx.lineWidth = 2;
-    ctx.setLineDash([5, 5]);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.setLineDash([6, 4]);
 
     ctx.beginPath();
     const firstPoint = worldToScreen(points[0].x, points[0].y);
@@ -332,12 +443,26 @@ export const Canvas: React.FC<CanvasProps> = ({
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Draw points
-    ctx.fillStyle = '#ff6600';
+    // Draw points with glow
     points.forEach(point => {
       const screenPoint = worldToScreen(point.x, point.y);
+
+      // Outer glow
+      ctx.fillStyle = canvasColors.drawingFill;
+      ctx.beginPath();
+      ctx.arc(screenPoint.x, screenPoint.y, 10, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Main point
+      ctx.fillStyle = canvasColors.drawing;
       ctx.beginPath();
       ctx.arc(screenPoint.x, screenPoint.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Inner highlight
+      ctx.fillStyle = canvasColors.point;
+      ctx.beginPath();
+      ctx.arc(screenPoint.x, screenPoint.y, 2, 0, Math.PI * 2);
       ctx.fill();
     });
   };
@@ -345,28 +470,46 @@ export const Canvas: React.FC<CanvasProps> = ({
   const drawCursor = (ctx: CanvasRenderingContext2D, worldPos: Point) => {
     const screenPos = worldToScreen(worldPos.x, worldPos.y);
 
-    ctx.strokeStyle = '#ff6600';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 3]);
+    // Draw crosshair with subtle glow
+    ctx.strokeStyle = canvasColors.cursor;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.shadowColor = canvasColors.cursor;
+    ctx.shadowBlur = 4;
 
-    // Draw crosshair
     ctx.beginPath();
-    ctx.moveTo(screenPos.x - 10, screenPos.y);
-    ctx.lineTo(screenPos.x + 10, screenPos.y);
-    ctx.moveTo(screenPos.x, screenPos.y - 10);
-    ctx.lineTo(screenPos.x, screenPos.y + 10);
+    ctx.moveTo(screenPos.x - 12, screenPos.y);
+    ctx.lineTo(screenPos.x + 12, screenPos.y);
+    ctx.moveTo(screenPos.x, screenPos.y - 12);
+    ctx.lineTo(screenPos.x, screenPos.y + 12);
     ctx.stroke();
 
     ctx.setLineDash([]);
+    ctx.shadowBlur = 0;
 
-    // Draw coordinates
-    ctx.fillStyle = '#333';
-    ctx.font = '11px monospace';
-    ctx.fillText(
-      `(${worldPos.x.toFixed(2)}, ${worldPos.y.toFixed(2)})`,
-      screenPos.x + 12,
-      screenPos.y - 12
-    );
+    // Draw coordinates with background for readability
+    const coordText = `(${worldPos.x.toFixed(2)}, ${worldPos.y.toFixed(2)})`;
+    ctx.font = '11px "SF Mono", "Fira Code", Consolas, monospace';
+    const textWidth = ctx.measureText(coordText).width;
+
+    // Background pill
+    const padding = 6;
+    const bgX = screenPos.x + 14;
+    const bgY = screenPos.y - 22;
+
+    ctx.fillStyle = 'rgba(10, 14, 19, 0.85)';
+    ctx.beginPath();
+    ctx.roundRect(bgX - padding, bgY - 10, textWidth + padding * 2, 18, 4);
+    ctx.fill();
+
+    // Border
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Text
+    ctx.fillStyle = canvasColors.cursorLabel;
+    ctx.fillText(coordText, bgX, bgY + 4);
   };
 
   return (

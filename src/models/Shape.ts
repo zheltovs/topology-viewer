@@ -17,6 +17,7 @@ export interface Shape {
   name: string;
   visible: boolean;
   selected: boolean;
+  color: string;
 }
 
 /**
@@ -28,12 +29,14 @@ export class Chain implements Shape {
   name: string;
   visible: boolean = true;
   selected: boolean = false;
+  color: string = '#1d9bf0';
   points: Point[];
 
-  constructor(points: Point[], name?: string) {
+  constructor(points: Point[], name?: string, color?: string) {
     this.points = points;
     this.id = `chain_${Date.now()}_${Math.random()}`;
     this.name = name || `Chain ${this.id.slice(-4)}`;
+    if (color) this.color = color;
   }
 
   /**
@@ -49,7 +52,7 @@ export class Chain implements Shape {
 
   clone(): Chain {
     const clonedPoints = this.points.map(p => p.clone());
-    const chain = new Chain(clonedPoints, this.name);
+    const chain = new Chain(clonedPoints, this.name, this.color);
     chain.visible = this.visible;
     chain.selected = this.selected;
     return chain;
@@ -65,12 +68,14 @@ export class Contour implements Shape {
   name: string;
   visible: boolean = true;
   selected: boolean = false;
+  color: string = '#00ba7c';
   points: Point[];
 
-  constructor(points: Point[], name?: string) {
+  constructor(points: Point[], name?: string, color?: string) {
     this.points = points;
     this.id = `contour_${Date.now()}_${Math.random()}`;
     this.name = name || `Contour ${this.id.slice(-4)}`;
+    if (color) this.color = color;
 
     // Ensure the contour is closed by checking if first and last points match
     if (this.points.length > 0) {
@@ -111,7 +116,7 @@ export class Contour implements Shape {
 
   clone(): Contour {
     const clonedPoints = this.points.map(p => p.clone());
-    const contour = new Contour(clonedPoints, this.name);
+    const contour = new Contour(clonedPoints, this.name, this.color);
     contour.visible = this.visible;
     contour.selected = this.selected;
     return contour;
