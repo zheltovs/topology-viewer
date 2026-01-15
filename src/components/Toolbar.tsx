@@ -5,6 +5,7 @@ interface ToolbarProps {
   drawingMode: 'chain' | 'contour' | null;
   onSetDrawingMode: (mode: 'chain' | 'contour' | null) => void;
   onImport: () => void;
+  onExport: () => void;
   canUndo: boolean;
   canRedo: boolean;
   onUndo: () => void;
@@ -51,10 +52,19 @@ const ImportIcon = () => (
   </svg>
 );
 
+const ExportIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="17,8 12,3 7,8" />
+    <line x1="12" y1="3" x2="12" y2="15" />
+  </svg>
+);
+
 export const Toolbar: React.FC<ToolbarProps> = ({
   drawingMode,
   onSetDrawingMode,
   onImport,
+  onExport,
   canUndo,
   canRedo,
   onUndo,
@@ -81,10 +91,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <span style={styles.groupLabel}>Draw</span>
         <div style={styles.buttonGroup}>
           <button
-            style={{
-              ...styles.button,
-              ...(drawingMode === 'chain' ? styles.buttonActive : {})
-            }}
+            className={`toolbar-btn ${drawingMode === 'chain' ? 'active' : ''}`}
             onClick={() => onSetDrawingMode(drawingMode === 'chain' ? null : 'chain')}
             title="Draw Chain (Ctrl+1)"
           >
@@ -93,10 +100,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </button>
 
           <button
-            style={{
-              ...styles.button,
-              ...(drawingMode === 'contour' ? styles.buttonActiveContour : {})
-            }}
+            className={`toolbar-btn ${drawingMode === 'contour' ? 'active-contour' : ''}`}
             onClick={() => onSetDrawingMode(drawingMode === 'contour' ? null : 'contour')}
             title="Draw Contour (Ctrl+2)"
           >
@@ -113,10 +117,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <span style={styles.groupLabel}>History</span>
         <div style={styles.buttonGroup}>
           <button
-            style={{
-              ...styles.iconButton,
-              ...(canUndo ? {} : styles.buttonDisabled)
-            }}
+            className="toolbar-icon-btn"
             onClick={onUndo}
             disabled={!canUndo}
             title="Undo (Ctrl+Z)"
@@ -125,10 +126,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </button>
 
           <button
-            style={{
-              ...styles.iconButton,
-              ...(canRedo ? {} : styles.buttonDisabled)
-            }}
+            className="toolbar-icon-btn"
             onClick={onRedo}
             disabled={!canRedo}
             title="Redo (Ctrl+Y)"
@@ -140,17 +138,27 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
       <div style={styles.divider} />
 
-      {/* Import */}
+      {/* Import / Export */}
       <div style={styles.toolGroup}>
         <span style={styles.groupLabel}>File</span>
-        <button
-          style={styles.button}
-          onClick={onImport}
-          title="Import from file"
-        >
-          <ImportIcon />
-          <span>Import</span>
-        </button>
+        <div style={styles.buttonGroup}>
+          <button
+            className="toolbar-btn"
+            onClick={onImport}
+            title="Import from file"
+          >
+            <ImportIcon />
+            <span>Import</span>
+          </button>
+          <button
+            className="toolbar-btn"
+            onClick={onExport}
+            title="Export to file"
+          >
+            <ExportIcon />
+            <span>Export</span>
+          </button>
+        </div>
       </div>
 
       {/* Status / Hints */}

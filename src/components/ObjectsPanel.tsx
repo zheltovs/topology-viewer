@@ -118,7 +118,7 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
             <div style={styles.emptyText}>
               Start by drawing a chain or contour, or import shapes from a file.
             </div>
-            
+
             <div style={styles.shortcuts}>
               <div style={styles.shortcutTitle}>Keyboard shortcuts</div>
               <div style={styles.shortcutItem}>
@@ -142,7 +142,7 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
                 <span>Redo</span>
               </div>
             </div>
-            
+
             <div style={styles.tip}>
               <div style={styles.tipIcon}>💡</div>
               <div style={styles.tipText}>Use mouse wheel to zoom, drag to pan</div>
@@ -177,7 +177,7 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
                 <div style={styles.itemDetails}>
                   {shape.points.length} points
                 </div>
-                
+
                 {/* Color picker */}
                 <div style={styles.colorPicker}>
                   {SHAPE_COLORS.map(color => (
@@ -200,10 +200,7 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
 
               <div style={styles.itemActions}>
                 <button
-                  style={{
-                    ...styles.actionButton,
-                    ...(shape.visible ? {} : styles.actionButtonMuted)
-                  }}
+                  className={`action-btn ${shape.visible ? '' : 'muted'}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     onToggleVisibility(shape.id);
@@ -214,7 +211,7 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
                 </button>
 
                 <button
-                  style={{...styles.actionButton, ...styles.deleteButton}}
+                  className="action-btn danger"
                   onClick={(e) => {
                     e.stopPropagation();
                     onDeleteShape(shape.id);

@@ -183,3 +183,166 @@ kbd {
   color: var(--text-primary);
 }
 
+/* ========================================
+   Button Styles with Hover Effects
+   ======================================== */
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  height: 24px;
+  background-color: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  outline: none;
+  position: relative;
+  overflow: hidden;
+}
+
+.toolbar-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 50%);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.toolbar-btn:hover {
+  background-color: var(--bg-elevated);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.toolbar-btn:hover::before {
+  opacity: 1;
+}
+
+.toolbar-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.toolbar-btn.active {
+  background-color: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+  box-shadow: 0 0 12px rgba(29, 155, 240, 0.4);
+}
+
+.toolbar-btn.active:hover {
+  background-color: var(--accent-primary-hover);
+  box-shadow: 0 0 16px rgba(29, 155, 240, 0.5);
+}
+
+.toolbar-btn.active-contour {
+  background-color: var(--accent-success);
+  border-color: var(--accent-success);
+  color: var(--text-primary);
+  box-shadow: 0 0 12px rgba(0, 186, 124, 0.4);
+}
+
+.toolbar-btn.active-contour:hover {
+  background-color: #00a86e;
+  box-shadow: 0 0 16px rgba(0, 186, 124, 0.5);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Icon-only buttons */
+.toolbar-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background-color: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  outline: none;
+  position: relative;
+}
+
+.toolbar-icon-btn::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 6px;
+  background: radial-gradient(circle, var(--accent-primary) 0%, transparent 70%);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: -1;
+}
+
+.toolbar-icon-btn:hover {
+  background-color: var(--bg-elevated);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  transform: scale(1.08);
+}
+
+.toolbar-icon-btn:hover::after {
+  opacity: 0.15;
+}
+
+.toolbar-icon-btn:active {
+  transform: scale(0.95);
+}
+
+.toolbar-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Action buttons in panels */
+.action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.action-btn:hover {
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+  transform: scale(1.1);
+}
+
+.action-btn:active {
+  transform: scale(0.95);
+}
+
+.action-btn.danger:hover {
+  background-color: rgba(244, 33, 46, 0.15);
+  color: var(--accent-danger);
+}
+
+.action-btn.muted {
+  color: var(--text-tertiary);
+  opacity: 0.5;
+}
+

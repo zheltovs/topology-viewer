@@ -225,7 +225,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Choose nice round numbers: 1, 2, 5, 10, 20, 50, 100, etc.
     const targetPixelSpacing = 100; // target pixel spacing between grid lines
     const rawWorldSpacing = targetPixelSpacing / transform.scale;
-    
+
     // Round to nice numbers (1, 2, 5, 10, 20, 50, etc.)
     const magnitude = Math.pow(10, Math.floor(Math.log10(rawWorldSpacing)));
     const normalized = rawWorldSpacing / magnitude;
@@ -234,9 +234,9 @@ export const Canvas: React.FC<CanvasProps> = ({
     else if (normalized < 3.5) niceNumber = 2;
     else if (normalized < 7.5) niceNumber = 5;
     else niceNumber = 10;
-    
+
     const worldSpacing = niceNumber * magnitude;
-    
+
     // Calculate world origin in screen coordinates
     const originScreen = worldToScreen(0, 0);
 
@@ -304,7 +304,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (Math.abs(wx) < worldSpacing * 0.01) continue; // Skip origin
       const screenX = originScreen.x + wx * transform.scale;
       if (screenX < 10 || screenX > width - 40) continue; // Avoid edge clipping
-      
+
       const label = wx.toFixed(decimals);
       const labelY = Math.min(Math.max(originScreen.y + 6, 6), height - 16);
       ctx.fillText(label, screenX + 4, labelY);
@@ -316,14 +316,14 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (Math.abs(wy) < worldSpacing * 0.01) continue; // Skip origin
       const screenY = originScreen.y - wy * transform.scale;
       if (screenY < 16 || screenY > height - 10) continue; // Avoid edge clipping
-      
+
       const label = wy.toFixed(decimals);
       const labelX = Math.min(Math.max(originScreen.x + 6, 6), width - 50);
       ctx.fillText(label, labelX, screenY - 6);
     }
 
     // Draw origin point (if visible)
-    if (originScreen.x >= -10 && originScreen.x <= width + 10 && 
+    if (originScreen.x >= -10 && originScreen.x <= width + 10 &&
         originScreen.y >= -10 && originScreen.y <= height + 10) {
       ctx.fillStyle = canvasColors.origin;
       ctx.beginPath();
