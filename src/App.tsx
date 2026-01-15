@@ -54,31 +54,42 @@ function App() {
     updateHistoryState();
   }, [tempPoints, drawingMode, shapes, commandHistory, updateHistoryState]);
 
-  // Handle shift key release for contour auto-close
-  useKeyboardShortcuts({
-    onUndo: () => {
-      if (commandHistory.undo()) {
-        updateHistoryState();
-      }
-    },
-    onRedo: () => {
-      if (commandHistory.redo()) {
-        updateHistoryState();
-      }
-    },
-    onEscape: () => {
-      if (drawingMode) {
-        finishDrawing();
-      }
-    },
-    onChainMode: () => {
-      setDrawingMode(prev => prev === 'chain' ? null : 'chain');
-      setTempPoints([]);
-    },
-    onContourMode: () => {
-      setDrawingMode(prev => prev === 'contour' ? null : 'contour');
-      setTempPoints([]);
+  // Keyboard handlers - memoized to prevent hook dependency recreation
+  const handleUndo = useCallback(() => {
+    if (commandHistory.undo()) {
+      updateHistoryState();
     }
+  }, [commandHistory, updateHistoryState]);
+
+  const handleRedo = useCallback(() => {
+    if (commandHistory.redo()) {
+      updateHistoryState();
+    }
+  }, [commandHistory, updateHistoryState]);
+
+  const handleEscape = useCallback(() => {
+    if (drawingMode) {
+      finishDrawing();
+    }
+  }, [drawingMode, finishDrawing]);
+
+  const handleChainMode = useCallback(() => {
+    setDrawingMode(prev => prev === 'chain' ? null : 'chain');
+    setTempPoints([]);
+  }, []);
+
+  const handleContourMode = useCallback(() => {
+    setDrawingMode(prev => prev === 'contour' ? null : 'contour');
+    setTempPoints([]);
+  }, []);
+
+  // Register keyboard shortcuts
+  useKeyboardShortcuts({
+    onUndo: handleUndo,
+    onRedo: handleRedo,
+    onEscape: handleEscape,
+    onChainMode: handleChainMode,
+    onContourMode: handleContourMode
   });
 
   // Toggle shape visibility
@@ -127,42 +138,78 @@ function App() {
         const lines = content.trim().split('\n');
 
         const parser = parserRegistry.getParser();
+        const newShapes: Shape[] = [];
 
+        // First, parse all shapes from the file
         for (const line of lines) {
           if (!line.trim()) continue;
 
-          // Format: "chain: x1, y1, x2, y2, ..." or "contour: x1, y1, x2, y2, ..."
-          const colonIndex = line.indexOf(':');
-          if (colonIndex === -1) {
-            console.warn('Invalid line format (missing colon):', line);
+          // Parse points from coordinates
+          const points = parser.parsePoints(line.trim());
+
+          if (points.length < 2) {
+            console.warn('Skipping line with less than 2 points:', line);
             continue;
           }
 
-          const type = line.substring(0, colonIndex).trim().toLowerCase();
-          const coords = line.substring(colonIndex + 1).trim();
-
+          // Auto-detect shape type:
+          // If first point equals last point -> contour
+          // Otherwise -> chain
           let newShape: Shape;
-          if (type === 'chain') {
-            newShape = parser.parseChain(coords);
-          } else if (type === 'contour') {
-            newShape = parser.parseContour(coords);
+          const firstPoint = points[0];
+          const lastPoint = points[points.length - 1];
+
+          if (firstPoint.equals(lastPoint)) {
+            // Contour - first and last points match
+            newShape = new Contour(points);
           } else {
-            console.warn('Unknown type:', type);
-            continue;
+            // Chain - first and last points don't match
+            newShape = new Chain(points);
           }
 
-          const command = new AddShapeCommand(shapes, newShape);
-          commandHistory.executeCommand(command);
+          newShapes.push(newShape);
         }
 
-        updateHistoryState();
+        // Clear existing shapes and add all imported shapes
+        if (newShapes.length > 0) {
+          // Clear command history and set new shapes directly
+          commandHistory.clear();
+          setShapes(newShapes);
+          updateHistoryState();
+        }
       } catch (error) {
         alert(`Error reading file: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     };
 
     input.click();
-  }, [shapes, commandHistory, updateHistoryState, parserRegistry]);
+  }, [commandHistory, updateHistoryState, parserRegistry]);
+
+  // Handle export to file
+  const handleExport = useCallback(() => {
+    if (shapes.length === 0) {
+      alert('No shapes to export');
+      return;
+    }
+
+    const lines = shapes.map(shape => {
+      const coords = shape.points
+        .map(p => `${p.x}, ${p.y}`)
+        .join(', ');
+      return coords;
+    });
+
+    const content = lines.join('\n');
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'shapes.txt';
+    link.click();
+
+    URL.revokeObjectURL(url);
+  }, [shapes]);
 
   return (
     <div className="app">
@@ -173,18 +220,11 @@ function App() {
           setTempPoints([]);
         }}
         onImport={handleImport}
+        onExport={handleExport}
         canUndo={canUndo}
         canRedo={canRedo}
-        onUndo={() => {
-          if (commandHistory.undo()) {
-            updateHistoryState();
-          }
-        }}
-        onRedo={() => {
-          if (commandHistory.redo()) {
-            updateHistoryState();
-          }
-        }}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
       />
 
       <div className="workspace">
