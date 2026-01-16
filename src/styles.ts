@@ -19,7 +19,7 @@ export const tokens = {
       primary: 'var(--accent-primary)',
       success: 'var(--accent-success)',
       danger: 'var(--accent-danger)',
-      infoBg: 'rgba(29, 155, 240, 0.15)',
+      infoBg: 'var(--accent-info-bg)',
     },
   },
   spacing: {
@@ -29,7 +29,7 @@ export const tokens = {
     lg: 'var(--space-lg)',
     xl: 'var(--space-xl)',
     xxl: 'var(--space-xxl)',
-    xxxl: '32px',
+    xxxl: 'var(--space-xxxl)',
   },
   typography: {
     fontFamily: {
@@ -37,17 +37,17 @@ export const tokens = {
       mono: 'var(--font-mono)',
     },
     fontSize: {
-      xs: '11px',
-      sm: '12px',
-      md: '14px',
-      lg: '16px',
+      xs: 'var(--font-size-xs)',
+      sm: 'var(--font-size-sm)',
+      md: 'var(--font-size-md)',
+      lg: 'var(--font-size-lg)',
     },
     fontWeight: {
-      medium: 500,
-      semibold: 600,
+      medium: 'var(--font-weight-medium)',
+      semibold: 'var(--font-weight-semibold)',
     },
     lineHeight: {
-      relaxed: '1.6',
+      relaxed: 'var(--line-height-relaxed)',
     },
   },
   radius: {
@@ -61,8 +61,8 @@ export const tokens = {
   },
   shadows: {
     glow: {
-      primary: '0 0 0 3px rgba(29, 155, 240, 0.35)',
-      success: '0 0 0 3px rgba(0, 186, 124, 0.35)',
+      primary: 'var(--shadow-glow-primary)',
+      success: 'var(--shadow-glow-success)',
     },
   },
   components: {
@@ -74,7 +74,7 @@ export const tokens = {
     },
     button: {
       height: {
-        md: '24px',
+        md: 'var(--button-height-md)',
       },
     },
   },
