@@ -1,4 +1,6 @@
 import { Point, Chain, Contour } from '../models';
+import type { Shape } from '../models';
+import { Gds2Parser } from './Gds2Parser';
 
 /**
  * Interface for parsing different input formats
@@ -19,6 +21,13 @@ export interface ShapeParser {
    * Create a contour from input string
    */
   parseContour(input: string, name?: string): Contour;
+}
+
+export interface BinaryShapeParser {
+  /**
+   * Parse a binary file into shapes
+   */
+  parseShapes(input: ArrayBuffer): Shape[];
 }
 
 /**
@@ -77,11 +86,13 @@ export class DefaultShapeParser implements ShapeParser {
  */
 export class ParserRegistry {
   private parsers: Map<string, ShapeParser> = new Map();
+  private binaryParsers: Map<string, BinaryShapeParser> = new Map();
   private defaultParser: string = 'default';
 
   constructor() {
     // Register default parser
     this.registerParser('default', new DefaultShapeParser());
+    this.registerBinaryParser('gds2', new Gds2Parser());
   }
 
   registerParser(name: string, parser: ShapeParser): void {
@@ -94,6 +105,20 @@ export class ParserRegistry {
 
     if (!parser) {
       throw new Error(`Parser '${parserName}' not found`);
+    }
+
+    return parser;
+  }
+
+  registerBinaryParser(name: string, parser: BinaryShapeParser): void {
+    this.binaryParsers.set(name, parser);
+  }
+
+  getBinaryParser(name: string): BinaryShapeParser {
+    const parser = this.binaryParsers.get(name);
+
+    if (!parser) {
+      throw new Error(`Binary parser '${name}' not found`);
     }
 
     return parser;
