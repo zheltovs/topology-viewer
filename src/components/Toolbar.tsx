@@ -145,7 +145,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <button
             className="toolbar-btn"
             onClick={onImport}
-            title="Import from file"
+            title="Import from file (.txt, .csv, .gds, .gds2)"
           >
             <ImportIcon />
             <span>Import</span>
@@ -293,4 +293,3 @@ const styles: { [key: string]: React.CSSProperties } = {
     animation: 'pulse 2s infinite',
   },
 };
-

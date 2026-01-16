@@ -10,7 +10,7 @@ A powerful web-based tool for visualizing and editing geometric shapes (chains a
 - **Coordinate Grid**: Axes with labeled coordinates for precise positioning
 - **Undo/Redo**: Full history support with Ctrl+Z/Ctrl+Y shortcuts
 - **Objects Panel**: View and manage all geometric shapes
-- **Import Support**: Import shapes from text files (.txt, .csv)
+- **Import Support**: Import shapes from text files (.txt, .csv) or GDS2 layout files (.gds, .gds2)
 - **Double Precision**: All coordinates use double-precision floating-point numbers
 - **Extensible Architecture**: Parser interface allows easy addition of new input formats
 
@@ -61,7 +61,9 @@ npm run build
 - `Ctrl+Y` - Redo
 - `Esc` - Finish current drawing
 
-### Import Format
+### Import Formats
+
+#### Text (.txt, .csv)
 
 Import shapes from a text file. Each line should contain the type and coordinates:
 
@@ -78,9 +80,13 @@ contour: 0, 0, 10.5, 0, 5.25, 9.1
 contour: 0, 0, 10, 0, 10, 10, 0, 10
 ```
 
+#### GDS2 (.gds, .gds2)
+
+Import GDS2 stream files. The importer reads `BOUNDARY` records as contours and `PATH` records as chains, preserving raw integer coordinates (no unit scaling).
+
 To import:
 1. Click the "📥 Import" button
-2. Select a .txt or .csv file
+2. Select a .txt, .csv, .gds, or .gds2 file
 3. All shapes will be loaded onto the canvas
 
 ## Architecture
