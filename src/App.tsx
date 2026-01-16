@@ -127,47 +127,55 @@ function App() {
   const handleImport = useCallback(() => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.txt,.csv';
+    input.accept = '.txt,.csv,.gds,.gds2';
 
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
 
       try {
-        const content = await file.text();
-        const lines = content.trim().split('\n');
-
-        const parser = parserRegistry.getParser();
         const newShapes: Shape[] = [];
+        const fileName = file.name.toLowerCase();
+        const isGds = fileName.endsWith('.gds') || fileName.endsWith('.gds2');
 
-        // First, parse all shapes from the file
-        for (const line of lines) {
-          if (!line.trim()) continue;
+        if (isGds) {
+          const buffer = await file.arrayBuffer();
+          const parser = parserRegistry.getBinaryParser('gds2');
+          newShapes.push(...parser.parseShapes(buffer));
+        } else {
+          const content = await file.text();
+          const lines = content.trim().split('\n');
+          const parser = parserRegistry.getParser();
 
-          // Parse points from coordinates
-          const points = parser.parsePoints(line.trim());
+          // First, parse all shapes from the file
+          for (const line of lines) {
+            if (!line.trim()) continue;
 
-          if (points.length < 2) {
-            console.warn('Skipping line with less than 2 points:', line);
-            continue;
+            // Parse points from coordinates
+            const points = parser.parsePoints(line.trim());
+
+            if (points.length < 2) {
+              console.warn('Skipping line with less than 2 points:', line);
+              continue;
+            }
+
+            // Auto-detect shape type:
+            // If first point equals last point -> contour
+            // Otherwise -> chain
+            let newShape: Shape;
+            const firstPoint = points[0];
+            const lastPoint = points[points.length - 1];
+
+            if (firstPoint.equals(lastPoint)) {
+              // Contour - first and last points match
+              newShape = new Contour(points);
+            } else {
+              // Chain - first and last points don't match
+              newShape = new Chain(points);
+            }
+
+            newShapes.push(newShape);
           }
-
-          // Auto-detect shape type:
-          // If first point equals last point -> contour
-          // Otherwise -> chain
-          let newShape: Shape;
-          const firstPoint = points[0];
-          const lastPoint = points[points.length - 1];
-
-          if (firstPoint.equals(lastPoint)) {
-            // Contour - first and last points match
-            newShape = new Contour(points);
-          } else {
-            // Chain - first and last points don't match
-            newShape = new Chain(points);
-          }
-
-          newShapes.push(newShape);
         }
 
         // Clear existing shapes and add all imported shapes
