@@ -91,14 +91,17 @@ export const Canvas: React.FC<CanvasProps> = ({
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
     const newScale = transform.scale * zoomFactor;
 
-    // Clamp scale
-    const clampedScale = Math.max(0.1, Math.min(10, newScale));
+    // Clamp scale - only maximum limit, no minimum limit
+    const clampedScale = Math.min(10, newScale);
+
+    // Calculate actual scale ratio (using clamped scale)
+    const actualScaleRatio = clampedScale / transform.scale;
 
     // Adjust offset to zoom towards mouse position
     setTransform(prev => {
       const scale = clampedScale;
-      const dx = (mouseX - canvas.width / 2) * (1 - zoomFactor);
-      const dy = (mouseY - canvas.height / 2) * (1 - zoomFactor);
+      const dx = (mouseX - canvas.width / 2) * (1 - actualScaleRatio);
+      const dy = (mouseY - canvas.height / 2) * (1 - actualScaleRatio);
 
       return {
         offsetX: prev.offsetX + dx,
