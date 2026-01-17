@@ -6,6 +6,7 @@ export const useKeyboardShortcuts = (handlers: {
   onEscape?: () => void;
   onChainMode?: () => void;
   onContourMode?: () => void;
+  onToggleStats?: () => void;
 }) => {
   // Use refs to always have access to latest handlers without causing effect re-runs
   const handlersRef = useRef(handlers);
@@ -45,6 +46,12 @@ export const useKeyboardShortcuts = (handlers: {
       if (e.ctrlKey && e.code === 'Digit2' && h.onContourMode) {
         e.preventDefault();
         h.onContourMode();
+      }
+
+      // Ctrl+I - Toggle stats display
+      if (e.ctrlKey && e.code === 'KeyI' && !e.shiftKey && h.onToggleStats) {
+        e.preventDefault();
+        h.onToggleStats();
       }
     };
 

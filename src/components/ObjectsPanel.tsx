@@ -212,7 +212,7 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
     const start = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN);
     const visibleCount = Math.ceil(containerHeight / ITEM_HEIGHT) + OVERSCAN * 2;
     const end = Math.min(shapes.length, start + visibleCount);
-    
+
     return {
       startIndex: start,
       visibleShapes: shapes.slice(start, end),
@@ -238,7 +238,7 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
       </div>
 
       {/* List with virtualization */}
-      <div 
+      <div
         ref={containerRef}
         style={styles.list}
         onScroll={handleScroll}
@@ -291,11 +291,11 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
           /* Virtual list container */
           <div style={{ height: totalHeight, position: 'relative' }}>
             {/* Positioned container for visible items */}
-            <div style={{ 
-              position: 'absolute', 
-              top: offsetY, 
-              left: 0, 
-              right: 0 
+            <div style={{
+              position: 'absolute',
+              top: offsetY,
+              left: 0,
+              right: 0
             }}>
               {visibleShapes.map((shape, localIndex) => (
                 <ShapeItem

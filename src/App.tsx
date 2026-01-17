@@ -14,6 +14,7 @@ function App() {
   const [drawingMode, setDrawingMode] = useState<'chain' | 'contour' | null>(null);
   const [tempPoints, setTempPoints] = useState<Point[]>([]);
   const [showIntersections, setShowIntersections] = useState(false);
+  const [showStats, setShowStats] = useState(false);
   const [commandHistory] = useState(() => {
     const history = new CommandHistory();
     history.setOnStateChange(setShapes);
@@ -86,13 +87,18 @@ function App() {
     setTempPoints([]);
   }, []);
 
+  const handleToggleStats = useCallback(() => {
+    setShowStats(prev => !prev);
+  }, []);
+
   // Register keyboard shortcuts
   useKeyboardShortcuts({
     onUndo: handleUndo,
     onRedo: handleRedo,
     onEscape: handleEscape,
     onChainMode: handleChainMode,
-    onContourMode: handleContourMode
+    onContourMode: handleContourMode,
+    onToggleStats: handleToggleStats
   });
 
   // Toggle shape visibility
@@ -336,6 +342,7 @@ function App() {
             drawingMode={drawingMode}
             tempPoints={tempPoints}
             showIntersections={showIntersections}
+            showStats={showStats}
           />
         </div>
 

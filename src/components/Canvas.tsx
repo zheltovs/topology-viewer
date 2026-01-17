@@ -35,6 +35,7 @@ interface CanvasProps {
   drawingMode: 'chain' | 'contour' | null;
   tempPoints: Point[];
   showIntersections?: boolean;
+  showStats?: boolean;
 }
 
 interface ViewTransform {
@@ -48,7 +49,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   onAddPoint,
   drawingMode,
   tempPoints,
-  showIntersections = false
+  showIntersections = false,
+  showStats = false
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [transform, setTransform] = useState<ViewTransform>({
@@ -321,13 +323,15 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     // Draw performance stats (visible shapes / total shapes)
-    const totalShapes = shapes.filter(s => s.visible).length;
-    const visibleCount = visibleShapes.filter(s => s.visible).length;
-    drawStats(ctx, visibleCount, totalShapes, transform.scale);
+    if (showStats) {
+      const totalShapes = shapes.filter(s => s.visible).length;
+      const visibleCount = visibleShapes.filter(s => s.visible).length;
+      drawStats(ctx, visibleCount, totalShapes, transform.scale);
+    }
 
     // Restore context
     ctx.restore();
-  }, [shapes, transform, tempPoints, drawingMode, mouseWorldPos, worldToScreen, showIntersections, intersections, getVisibleShapes]);
+  }, [shapes, transform, tempPoints, drawingMode, mouseWorldPos, worldToScreen, showIntersections, intersections, getVisibleShapes, showStats]);
 
   const drawGrid = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
     // Calculate grid spacing based on scale - use fixed world units
@@ -830,27 +834,14 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     const statsText = `Rendering: ${visibleCount} / ${totalCount} shapes | Zoom: ${scale.toFixed(3)}x`;
     ctx.font = '11px "SF Mono", "Fira Code", Consolas, monospace';
-    const textWidth = ctx.measureText(statsText).width;
 
     // Position in bottom-left corner
-    const padding = 8;
-    const bgX = 10;
-    const bgY = canvas.height - 30;
+    const x = 10;
+    const y = canvas.height - 15;
 
-    // Background
-    ctx.fillStyle = 'rgba(10, 14, 19, 0.75)';
-    ctx.beginPath();
-    ctx.roundRect(bgX, bgY, textWidth + padding * 2, 22, 4);
-    ctx.fill();
-
-    // Border
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // Text
-    ctx.fillStyle = visibleCount < totalCount ? '#00ba7c' : '#6e767d';
-    ctx.fillText(statsText, bgX + padding, bgY + 15);
+    // Text with dark blue color
+    ctx.fillStyle = '#3ff832ff';
+    ctx.fillText(statsText, x, y);
   };
 
   return (
