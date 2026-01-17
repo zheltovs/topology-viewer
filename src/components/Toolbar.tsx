@@ -10,6 +10,8 @@ interface ToolbarProps {
   canRedo: boolean;
   onUndo: () => void;
   onRedo: () => void;
+  showIntersections?: boolean;
+  onToggleIntersections?: () => void;
 }
 
 // Icon components for clean, modern look
@@ -60,6 +62,16 @@ const ExportIcon = () => (
   </svg>
 );
 
+const IntersectionIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="3" fill="currentColor" />
+    <line x1="12" y1="2" x2="12" y2="6" />
+    <line x1="12" y1="18" x2="12" y2="22" />
+    <line x1="2" y1="12" x2="6" y2="12" />
+    <line x1="18" y1="12" x2="22" y2="12" />
+  </svg>
+);
+
 export const Toolbar: React.FC<ToolbarProps> = ({
   drawingMode,
   onSetDrawingMode,
@@ -68,7 +80,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   canUndo,
   canRedo,
   onUndo,
-  onRedo
+  onRedo,
+  showIntersections = false,
+  onToggleIntersections
 }) => {
   return (
     <div style={styles.toolbar}>
@@ -135,6 +149,22 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </button>
         </div>
       </div>
+
+      <div style={styles.divider} />
+
+      {/* Analysis */}
+      {onToggleIntersections && (
+        <div style={styles.toolGroup}>
+          <button
+            className={`toolbar-btn ${showIntersections ? 'active-intersections' : ''}`}
+            onClick={onToggleIntersections}
+            title="Show/Hide Intersections"
+          >
+            <IntersectionIcon />
+            <span>Intersections</span>
+          </button>
+        </div>
+      )}
 
       <div style={styles.divider} />
 
@@ -264,6 +294,12 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderColor: tokens.colors.accent.success,
     color: tokens.colors.text.primary,
     boxShadow: tokens.shadows.glow.success,
+  },
+  buttonActiveIntersections: {
+    backgroundColor: '#ff0000',
+    borderColor: '#ff0000',
+    color: '#ffffff',
+    boxShadow: '0 0 12px rgba(255, 0, 0, 0.4)',
   },
   buttonDisabled: {
     opacity: 0.35,
