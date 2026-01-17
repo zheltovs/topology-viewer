@@ -88,13 +88,6 @@ export const Canvas: React.FC<CanvasProps> = ({
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
     // Zoom factor
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
     const newScale = transform.scale * zoomFactor;
@@ -102,22 +95,37 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Clamp scale - only maximum limit, no minimum limit
     const clampedScale = Math.min(10, newScale);
 
-    // Calculate actual scale ratio (using clamped scale)
-    const actualScaleRatio = clampedScale / transform.scale;
+    // Zoom relative to screen center
+    // Calculate world coordinates of screen center before zoom
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-    // Adjust offset to zoom towards mouse position
+    // Center of screen in screen coordinates
+    const screenCenterX = canvas.width / 2;
+    const screenCenterY = canvas.height / 2;
+
+    // Convert screen center to world coordinates (before zoom)
+    const worldCenterX = (screenCenterX - canvas.width / 2 - transform.offsetX) / transform.scale;
+    const worldCenterY = -(screenCenterY - canvas.height / 2 - transform.offsetY) / transform.scale;
+
+    // Apply new scale and adjust offset to keep world center at screen center
     setTransform(prev => {
       const scale = clampedScale;
-      const dx = (mouseX - canvas.width / 2) * (1 - actualScaleRatio);
-      const dy = (mouseY - canvas.height / 2) * (1 - actualScaleRatio);
+
+      // Calculate new offset so that worldCenter remains at screen center
+      // From: screenX = worldX * scale + canvas.width / 2 + offsetX
+      // We want: screenCenterX = worldCenterX * scale + canvas.width / 2 + newOffsetX
+      // So: newOffsetX = screenCenterX - canvas.width / 2 - worldCenterX * scale
+      const newOffsetX = screenCenterX - canvas.width / 2 - worldCenterX * scale;
+      const newOffsetY = screenCenterY - canvas.height / 2 + worldCenterY * scale; // Y is inverted
 
       return {
-        offsetX: prev.offsetX + dx,
-        offsetY: prev.offsetY + dy,
+        offsetX: newOffsetX,
+        offsetY: newOffsetY,
         scale
       };
     });
-  }, [transform, screenToWorld]);
+  }, [transform]);
 
   // Handle mouse move
   const handleMouseMove = useCallback((e: MouseEvent) => {
