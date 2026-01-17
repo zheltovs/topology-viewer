@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import type { Shape, Layer } from '../models';
 import { ShapeType, LAYER_COLORS, createLayer, DEFAULT_LAYER_ID } from '../models';
 import { tokens } from '../styles';
@@ -115,7 +115,24 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [showColorPicker, setShowColorPicker] = useState<string | null>(null);
+  const [colorPickerPosition, setColorPickerPosition] = useState<{ top: number; left: number } | null>(null);
   const [assignMode, setAssignMode] = useState<string | null>(null); // layerId for assigning selected shapes
+  const colorPickerRef = useRef<HTMLDivElement>(null);
+
+  // Close color picker when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (colorPickerRef.current && !colorPickerRef.current.contains(event.target as Node)) {
+        setShowColorPicker(null);
+        setColorPickerPosition(null);
+      }
+    };
+
+    if (showColorPicker) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showColorPicker]);
 
   // Get shapes for a specific layer
   const getShapesForLayer = useCallback((layerId: string) => {
@@ -167,10 +184,27 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     setExpandedLayers(prev => new Set([...prev, layer.id]));
   };
 
+  // Handle color picker open with position calculation
+  const handleColorPickerOpen = (layerId: string, event: React.MouseEvent<HTMLButtonElement>) => {
+    if (showColorPicker === layerId) {
+      setShowColorPicker(null);
+      setColorPickerPosition(null);
+      return;
+    }
+    
+    const rect = event.currentTarget.getBoundingClientRect();
+    setColorPickerPosition({
+      top: rect.bottom + 4,
+      left: rect.left,
+    });
+    setShowColorPicker(layerId);
+  };
+
   // Handle color change
   const handleColorChange = (layerId: string, color: string) => {
     onLayerUpdate(layerId, { color });
     setShowColorPicker(null);
+    setColorPickerPosition(null);
   };
 
   // Toggle shape selection in layer view
@@ -331,24 +365,9 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                 <div style={styles.colorPickerWrapper}>
                   <button
                     style={{ ...styles.colorBtn, backgroundColor: layer.color }}
-                    onClick={() => setShowColorPicker(showColorPicker === layer.id ? null : layer.id)}
+                    onClick={(e) => handleColorPickerOpen(layer.id, e)}
                     title="Change layer color"
                   />
-                  {showColorPicker === layer.id && (
-                    <div style={styles.colorPickerPopup}>
-                      {LAYER_COLORS.map(color => (
-                        <button
-                          key={color}
-                          style={{
-                            ...styles.colorOption,
-                            backgroundColor: color,
-                            ...(layer.color === color ? styles.colorOptionActive : {})
-                          }}
-                          onClick={() => handleColorChange(layer.id, color)}
-                        />
-                      ))}
-                    </div>
-                  )}
                 </div>
 
                 {/* Layer name */}
@@ -536,6 +555,33 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
           <kbd>Ctrl</kbd><span>+click to multi-select</span> <span style={styles.footerDot}>•</span> <kbd>Shift</kbd><span>+click for range</span>
         </span>
       </div>
+
+      {/* Color picker popup (rendered as portal to avoid clipping) */}
+      {showColorPicker && colorPickerPosition && (
+        <div 
+          ref={colorPickerRef}
+          style={{
+            ...styles.colorPickerPopup,
+            top: colorPickerPosition.top,
+            left: colorPickerPosition.left,
+          }}
+        >
+          {LAYER_COLORS.map(color => {
+            const currentLayer = layers.find(l => l.id === showColorPicker);
+            return (
+              <button
+                key={color}
+                style={{
+                  ...styles.colorOption,
+                  backgroundColor: color,
+                  ...(currentLayer?.color === color ? styles.colorOptionActive : {})
+                }}
+                onClick={() => handleColorChange(showColorPicker, color)}
+              />
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };
@@ -708,7 +754,6 @@ const styles: { [key: string]: React.CSSProperties } = {
   layerItem: {
     marginBottom: tokens.spacing.xs,
     borderRadius: tokens.radius.md,
-    overflow: 'hidden',
     border: `1px solid ${tokens.colors.border.subtle}`,
     backgroundColor: tokens.colors.bg.tertiary,
   },
@@ -748,10 +793,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     flexShrink: 0,
   },
   colorPickerPopup: {
-    position: 'absolute',
-    top: '100%',
-    left: 0,
-    marginTop: '4px',
+    position: 'fixed',
     display: 'grid',
     gridTemplateColumns: 'repeat(4, 1fr)',
     gap: '4px',
@@ -760,7 +802,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     border: `1px solid ${tokens.colors.border.default}`,
     borderRadius: tokens.radius.md,
     boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-    zIndex: 100,
+    zIndex: 1000,
   },
   colorOption: {
     width: '24px',
