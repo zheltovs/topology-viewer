@@ -1,7 +1,11 @@
-import React, { memo, useState, useEffect } from 'react';
+import React, { memo, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { Shape } from '../models';
 import { ShapeType } from '../models';
 import { tokens } from '../styles';
+
+// Virtualization constants
+const ITEM_HEIGHT = 88; // Height of each item in pixels (including margin)
+const OVERSCAN = 5; // Number of items to render outside viewport
 
 interface ObjectsPanelProps {
   shapes: Shape[];
@@ -175,34 +179,48 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
   onDeleteShape,
   onChangeColor,
 }) => {
-  // Progressive rendering: render items in batches to avoid blocking UI
-  const [renderedCount, setRenderedCount] = useState(100);
+  // Virtualization state
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [containerHeight, setContainerHeight] = useState(0);
 
+  // Update container height on mount and resize
   useEffect(() => {
-    // Reset rendered count when shapes change significantly
-    if (shapes.length > renderedCount) {
-      setRenderedCount(100);
+    const container = containerRef.current;
+    if (!container) return;
 
-      // Gradually increase rendered items
-      const timer = setInterval(() => {
-        setRenderedCount(prev => {
-          const next = prev + 100;
-          if (next >= shapes.length) {
-            clearInterval(timer);
-            return shapes.length;
-          }
-          return next;
-        });
-      }, 16); // ~60fps
+    const updateHeight = () => {
+      setContainerHeight(container.clientHeight);
+    };
 
-      return () => clearInterval(timer);
-    } else {
-      setRenderedCount(shapes.length);
-    }
-  }, [shapes.length]);
+    updateHeight();
 
-  const visibleShapes = shapes.slice(0, renderedCount);
-  const hasMore = renderedCount < shapes.length;
+    const resizeObserver = new ResizeObserver(updateHeight);
+    resizeObserver.observe(container);
+
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  // Handle scroll
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  }, []);
+
+  // Calculate visible range with overscan
+  const { startIndex, visibleShapes, offsetY } = useMemo(() => {
+    // Calculate visible range
+    const start = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN);
+    const visibleCount = Math.ceil(containerHeight / ITEM_HEIGHT) + OVERSCAN * 2;
+    const end = Math.min(shapes.length, start + visibleCount);
+    
+    return {
+      startIndex: start,
+      visibleShapes: shapes.slice(start, end),
+      offsetY: start * ITEM_HEIGHT,
+    };
+  }, [shapes, scrollTop, containerHeight]);
+
+  const totalHeight = shapes.length * ITEM_HEIGHT;
 
   return (
     <div style={styles.panel}>
@@ -212,10 +230,19 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
           <span>Objects</span>
           <span style={styles.itemCount}>{shapes.length}</span>
         </div>
+        {shapes.length > 50 && (
+          <span style={styles.virtualizedHint}>
+            Showing {visibleShapes.length} of {shapes.length}
+          </span>
+        )}
       </div>
 
-      {/* List */}
-      <div style={styles.list}>
+      {/* List with virtualization */}
+      <div 
+        ref={containerRef}
+        style={styles.list}
+        onScroll={handleScroll}
+      >
         {shapes.length === 0 ? (
           <div style={styles.emptyState}>
             <div style={styles.emptyIcon}>
@@ -261,42 +288,28 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
             </div>
           </div>
         ) : (
-          <>
-            {visibleShapes.map((shape, index) => (
-              <ShapeItem
-                key={shape.id}
-                shape={shape}
-                index={index}
-                onToggleVisibility={onToggleVisibility}
-                onSelectShape={onSelectShape}
-                onDeleteShape={onDeleteShape}
-                onChangeColor={onChangeColor}
-              />
-            ))}
-            {hasMore && (
-              <div style={styles.loadingMore}>
-                <div style={styles.loadingSpinner}>
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={tokens.colors.text.tertiary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" opacity="0.25" />
-                    <path d="M12 2a10 10 0 0 1 10 10" opacity="1">
-                      <animateTransform
-                        attributeName="transform"
-                        attributeType="XML"
-                        type="rotate"
-                        from="0 12 12"
-                        to="360 12 12"
-                        dur="1s"
-                        repeatCount="indefinite"
-                      />
-                    </path>
-                  </svg>
-                </div>
-                <span style={styles.loadingText}>
-                  Loading {renderedCount} / {shapes.length} objects...
-                </span>
-              </div>
-            )}
-          </>
+          /* Virtual list container */
+          <div style={{ height: totalHeight, position: 'relative' }}>
+            {/* Positioned container for visible items */}
+            <div style={{ 
+              position: 'absolute', 
+              top: offsetY, 
+              left: 0, 
+              right: 0 
+            }}>
+              {visibleShapes.map((shape, localIndex) => (
+                <ShapeItem
+                  key={shape.id}
+                  shape={shape}
+                  index={startIndex + localIndex}
+                  onToggleVisibility={onToggleVisibility}
+                  onSelectShape={onSelectShape}
+                  onDeleteShape={onDeleteShape}
+                  onChangeColor={onChangeColor}
+                />
+              ))}
+            </div>
+          </div>
         )}
       </div>
 
@@ -348,6 +361,10 @@ const styles: { [key: string]: React.CSSProperties } = {
     backgroundColor: tokens.colors.bg.elevated,
     borderRadius: '10px',
   },
+  virtualizedHint: {
+    fontSize: tokens.typography.fontSize.xs,
+    color: tokens.colors.text.tertiary,
+  },
   list: {
     flex: 1,
     overflowY: 'auto',
@@ -364,22 +381,6 @@ const styles: { [key: string]: React.CSSProperties } = {
   emptyIcon: {
     marginBottom: tokens.spacing.lg,
     opacity: 0.5,
-  },
-  loadingSpinner: {
-    marginBottom: tokens.spacing.lg,
-    opacity: 0.7,
-  },
-  loadingMore: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: tokens.spacing.sm,
-    padding: tokens.spacing.lg,
-    color: tokens.colors.text.tertiary,
-    fontSize: tokens.typography.fontSize.sm,
-  },
-  loadingText: {
-    color: tokens.colors.text.tertiary,
   },
   emptyTitle: {
     fontSize: tokens.typography.fontSize.md,
