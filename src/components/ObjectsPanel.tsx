@@ -159,12 +159,16 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
                         ...styles.colorButton,
                         backgroundColor: color,
                         ...(shape.color === color ? styles.colorButtonActive : {}),
+                        ...(shape.layerId ? styles.colorButtonDisabled : {}),
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onChangeColor(shape.id, color);
+                        if (!shape.layerId) {
+                          onChangeColor(shape.id, color);
+                        }
                       }}
-                      title={`Change color`}
+                      title={shape.layerId ? 'Remove from layer to change color' : 'Change color'}
+                      disabled={!!shape.layerId}
                     />
                   ))}
                 </div>
@@ -384,6 +388,10 @@ const styles: { [key: string]: React.CSSProperties } = {
   colorButtonActive: {
     boxShadow: '0 0 0 2px rgba(255, 255, 255, 0.3)',
     transform: 'scale(1.15)',
+  },
+  colorButtonDisabled: {
+    opacity: 0.3,
+    cursor: 'not-allowed',
   },
   itemActions: {
     display: 'flex',

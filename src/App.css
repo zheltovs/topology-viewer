@@ -187,6 +187,14 @@ kbd {
   outline-offset: 2px;
 }
 
+/* Remove focus outline from clickable items in object/layer panels */
+[tabindex="-1"]:focus,
+[tabindex="-1"]:focus-visible,
+[tabindex="-1"]:focus-within {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 /* ========================================
    Selection
    ======================================== */
