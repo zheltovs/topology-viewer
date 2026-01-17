@@ -123,7 +123,7 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
         ) : (
           shapes.map((shape, index) => (
             <div
-              key={shape.id}
+              key={`${shape.id}-${shape.selected}`}
               style={{
                 ...styles.item,
                 ...(shape.selected ? styles.itemSelected : {}),
@@ -338,6 +338,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     border: `1px solid ${tokens.colors.border.subtle}`,
     cursor: 'pointer',
     transition: `all ${tokens.transitions.normal}`,
+    outline: 'none',
   },
   itemSelected: {
     backgroundColor: tokens.colors.bg.elevated,
