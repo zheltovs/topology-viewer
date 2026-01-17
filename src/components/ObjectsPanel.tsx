@@ -57,14 +57,6 @@ const TrashIcon = () => (
   </svg>
 );
 
-const LayersIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polygon points="12,2 2,7 12,12 22,7" />
-    <polyline points="2,17 12,22 22,17" />
-    <polyline points="2,12 12,17 22,12" />
-  </svg>
-);
-
 export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
   shapes,
   onToggleVisibility,
@@ -72,35 +64,14 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
   onDeleteShape,
   onChangeColor
 }) => {
-  const chainCount = shapes.filter(s => s.type === ShapeType.CHAIN).length;
-  const contourCount = shapes.filter(s => s.type === ShapeType.CONTOUR).length;
-
   return (
     <div style={styles.panel}>
       {/* Header */}
       <div style={styles.header}>
-        <div style={styles.headerTop}>
-          <div style={styles.headerIcon}>
-            <LayersIcon />
-          </div>
-          <div style={styles.headerText}>
-            <h3 style={styles.title}>Objects</h3>
-            <div style={styles.subtitle}>{shapes.length} items</div>
-          </div>
+        <div style={styles.headerTitle}>
+          <span>Objects</span>
+          <span style={styles.itemCount}>{shapes.length}</span>
         </div>
-
-        {shapes.length > 0 && (
-          <div style={styles.stats}>
-            <div style={styles.statItem}>
-              <ChainIcon color={tokens.colors.accent.primary} />
-              <span>{chainCount}</span>
-            </div>
-            <div style={styles.statItem}>
-              <ContourIcon color={tokens.colors.accent.success} />
-              <span>{contourCount}</span>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* List */}
@@ -109,9 +80,10 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
           <div style={styles.emptyState}>
             <div style={styles.emptyIcon}>
               <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke={tokens.colors.text.tertiary} strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="12,2 2,7 12,12 22,7" />
-                <polyline points="2,17 12,22 22,17" />
-                <polyline points="2,12 12,17 22,12" />
+                <rect x="3" y="3" width="7" height="7" />
+                <rect x="14" y="3" width="7" height="7" />
+                <rect x="14" y="14" width="7" height="7" />
+                <rect x="3" y="14" width="7" height="7" />
               </svg>
             </div>
             <div style={styles.emptyTitle}>No objects yet</div>
@@ -246,51 +218,33 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontFamily: tokens.typography.fontFamily.sans,
   },
   header: {
-    padding: tokens.spacing.lg,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: `${tokens.spacing.md} ${tokens.spacing.lg}`,
     borderBottom: `1px solid ${tokens.colors.border.subtle}`,
     backgroundColor: tokens.colors.bg.tertiary,
   },
-  headerTop: {
+  headerTitle: {
     display: 'flex',
     alignItems: 'center',
-    gap: tokens.spacing.md,
-    marginBottom: tokens.spacing.md,
-  },
-  headerIcon: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '40px',
-    height: '40px',
-    backgroundColor: tokens.colors.bg.elevated,
-    borderRadius: tokens.radius.md,
-    color: tokens.colors.text.secondary,
-  },
-  headerText: {
-    flex: 1,
-  },
-  title: {
-    margin: 0,
-    fontSize: tokens.typography.fontSize.lg,
+    gap: tokens.spacing.sm,
+    fontSize: tokens.typography.fontSize.md,
     fontWeight: tokens.typography.fontWeight.semibold,
     color: tokens.colors.text.primary,
-    letterSpacing: '-0.01em',
   },
-  subtitle: {
-    fontSize: tokens.typography.fontSize.sm,
-    color: tokens.colors.text.tertiary,
-    marginTop: '2px',
-  },
-  stats: {
-    display: 'flex',
-    gap: tokens.spacing.lg,
-  },
-  statItem: {
-    display: 'flex',
+  itemCount: {
+    display: 'inline-flex',
     alignItems: 'center',
-    gap: tokens.spacing.xs,
-    fontSize: tokens.typography.fontSize.sm,
+    justifyContent: 'center',
+    minWidth: '20px',
+    height: '20px',
+    padding: '0 6px',
+    fontSize: tokens.typography.fontSize.xs,
+    fontWeight: tokens.typography.fontWeight.medium,
     color: tokens.colors.text.secondary,
+    backgroundColor: tokens.colors.bg.elevated,
+    borderRadius: '10px',
   },
   list: {
     flex: 1,

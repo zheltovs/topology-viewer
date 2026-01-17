@@ -82,6 +82,12 @@ const ChainIcon = ({ color = 'currentColor' }: { color?: string }) => (
   </svg>
 );
 
+const PointIcon = ({ color = 'currentColor' }: { color?: string }) => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="3" fill={color} />
+  </svg>
+);
+
 const MoveIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M5 9l-3 3 3 3" />
@@ -276,7 +282,13 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
       <div style={styles.layersList}>
         {layers.length === 0 && unassignedShapes.length === 0 && (
           <div style={styles.emptyState}>
-            <div style={styles.emptyIcon}>📁</div>
+            <div style={styles.emptyIcon}>
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.5 }}>
+                <polygon points="12,2 2,7 12,12 22,7" />
+                <polyline points="2,17 12,22 22,17" />
+                <polyline points="2,12 12,17 22,12" />
+              </svg>
+            </div>
             <div style={styles.emptyTitle}>No layers yet</div>
             <div style={styles.emptyText}>
               Create layers to organize your shapes. Import from GDS2 to auto-create layers.
@@ -354,7 +366,9 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                     <>
                       <span style={styles.layerName}>{layer.name}</span>
                       <span style={styles.layerMeta}>
-                        {layerShapes.length} shapes
+                        <span style={styles.layerStat}><ContourIcon color={layer.color} />{contourCount}</span>
+                        <span style={styles.layerStat}><ChainIcon color={layer.color} />{chainCount}</span>
+                        <span style={styles.layerStat}><PointIcon color={tokens.colors.text.tertiary} />{layerShapes.reduce((sum, s) => sum + s.points.length, 0)}</span>
                         {layer.gdsLayerNumber !== undefined && (
                           <span style={styles.gdsNumber}>GDS: {layer.gdsLayerNumber}</span>
                         )}
@@ -515,7 +529,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
       {/* Footer hint */}
       <div style={styles.footer}>
         <span style={styles.footerText}>
-          <kbd>Ctrl</kbd>+click to multi-select • <kbd>Shift</kbd>+click for range
+          <kbd>Ctrl</kbd><span>+click to multi-select</span> <span style={styles.footerDot}>•</span> <kbd>Shift</kbd><span>+click for range</span>
         </span>
       </div>
     </div>
@@ -658,9 +672,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     textAlign: 'center',
   },
   emptyIcon: {
-    fontSize: '48px',
     marginBottom: tokens.spacing.md,
-    opacity: 0.5,
+    color: tokens.colors.text.tertiary,
   },
   emptyTitle: {
     fontSize: tokens.typography.fontSize.md,
@@ -778,6 +791,11 @@ const styles: { [key: string]: React.CSSProperties } = {
     gap: tokens.spacing.sm,
     fontSize: tokens.typography.fontSize.xs,
     color: tokens.colors.text.tertiary,
+  },
+  layerStat: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '2px',
   },
   gdsNumber: {
     padding: '1px 6px',
@@ -902,8 +920,13 @@ const styles: { [key: string]: React.CSSProperties } = {
   footerText: {
     display: 'flex',
     alignItems: 'center',
-    gap: tokens.spacing.xs,
+    justifyContent: 'center',
+    gap: '4px',
     fontSize: tokens.typography.fontSize.xs,
     color: tokens.colors.text.tertiary,
+    width: '100%',
+  },
+  footerDot: {
+    margin: '0 4px',
   },
 };
