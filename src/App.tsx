@@ -106,19 +106,18 @@ function App() {
 
   // Select shape (toggle if already selected)
   const handleSelectShape = useCallback((shapeId: string) => {
-    const shape = shapes.find(s => s.id === shapeId);
-    if (shape && shape.selected) {
+    const isAlreadySelected = selectedShapeIds.includes(shapeId);
+
+    if (isAlreadySelected) {
       // Deselect if already selected
-      shape.selected = false;
-      setShapes([...shapes]);
+      setShapes(shapes.map(s => ({ ...s, selected: false })));
       setSelectedShapeIds([]);
     } else {
       // Select new shape
-      shapes.forEach(s => s.selected = s.id === shapeId);
-      setShapes([...shapes]);
+      setShapes(shapes.map(s => s.id === shapeId ? { ...s, selected: true } : { ...s, selected: false }));
       setSelectedShapeIds([shapeId]);
     }
-  }, [shapes]);
+  }, [shapes, selectedShapeIds]);
 
   // Select multiple shapes (for layers panel)
   const handleSelectShapes = useCallback((shapeIds: string[]) => {
