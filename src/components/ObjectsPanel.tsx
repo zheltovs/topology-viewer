@@ -240,10 +240,7 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
 
 const styles: { [key: string]: React.CSSProperties } = {
   panel: {
-    width: tokens.components.sidebar.width,
     height: '100%',
-    backgroundColor: tokens.colors.bg.secondary,
-    borderLeft: `1px solid ${tokens.colors.border.subtle}`,
     display: 'flex',
     flexDirection: 'column',
     fontFamily: tokens.typography.fontFamily.sans,

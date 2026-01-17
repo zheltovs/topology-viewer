@@ -18,6 +18,7 @@ export interface Shape {
   visible: boolean;
   selected: boolean;
   color: string;
+  layerId?: string;
 }
 
 /**
@@ -31,12 +32,14 @@ export class Chain implements Shape {
   selected: boolean = false;
   color: string = '#1d9bf0';
   points: Point[];
+  layerId?: string;
 
-  constructor(points: Point[], name?: string, color?: string) {
+  constructor(points: Point[], name?: string, color?: string, layerId?: string) {
     this.points = points;
     this.id = `chain_${Date.now()}_${Math.random()}`;
     this.name = name || `Chain ${this.id.slice(-4)}`;
     if (color) this.color = color;
+    if (layerId) this.layerId = layerId;
   }
 
   /**
@@ -52,7 +55,7 @@ export class Chain implements Shape {
 
   clone(): Chain {
     const clonedPoints = this.points.map(p => p.clone());
-    const chain = new Chain(clonedPoints, this.name, this.color);
+    const chain = new Chain(clonedPoints, this.name, this.color, this.layerId);
     chain.visible = this.visible;
     chain.selected = this.selected;
     return chain;
@@ -70,12 +73,14 @@ export class Contour implements Shape {
   selected: boolean = false;
   color: string = '#00ba7c';
   points: Point[];
+  layerId?: string;
 
-  constructor(points: Point[], name?: string, color?: string) {
+  constructor(points: Point[], name?: string, color?: string, layerId?: string) {
     this.points = points;
     this.id = `contour_${Date.now()}_${Math.random()}`;
     this.name = name || `Contour ${this.id.slice(-4)}`;
     if (color) this.color = color;
+    if (layerId) this.layerId = layerId;
 
     // Ensure the contour is closed by checking if first and last points match
     if (this.points.length > 0) {
@@ -116,7 +121,7 @@ export class Contour implements Shape {
 
   clone(): Contour {
     const clonedPoints = this.points.map(p => p.clone());
-    const contour = new Contour(clonedPoints, this.name, this.color);
+    const contour = new Contour(clonedPoints, this.name, this.color, this.layerId);
     contour.visible = this.visible;
     contour.selected = this.selected;
     return contour;
