@@ -104,11 +104,20 @@ function App() {
     }
   }, [shapes]);
 
-  // Select shape
+  // Select shape (toggle if already selected)
   const handleSelectShape = useCallback((shapeId: string) => {
-    shapes.forEach(s => s.selected = s.id === shapeId);
-    setShapes([...shapes]);
-    setSelectedShapeIds([shapeId]);
+    const shape = shapes.find(s => s.id === shapeId);
+    if (shape && shape.selected) {
+      // Deselect if already selected
+      shape.selected = false;
+      setShapes([...shapes]);
+      setSelectedShapeIds([]);
+    } else {
+      // Select new shape
+      shapes.forEach(s => s.selected = s.id === shapeId);
+      setShapes([...shapes]);
+      setSelectedShapeIds([shapeId]);
+    }
   }, [shapes]);
 
   // Select multiple shapes (for layers panel)
@@ -241,13 +250,13 @@ function App() {
   }, []);
 
   const handleLayerUpdate = useCallback((layerId: string, updates: Partial<Layer>) => {
-    setLayers(prev => prev.map(layer => 
+    setLayers(prev => prev.map(layer =>
       layer.id === layerId ? { ...layer, ...updates } : layer
     ));
-    
+
     // If color changed, update all shapes in this layer
     if (updates.color) {
-      setShapes(prev => prev.map(shape => 
+      setShapes(prev => prev.map(shape =>
         shape.layerId === layerId ? { ...shape, color: updates.color! } : shape
       ));
     }
@@ -256,7 +265,7 @@ function App() {
   const handleLayerDelete = useCallback((layerId: string) => {
     // Remove layer but keep shapes (unassign them)
     setLayers(prev => prev.filter(l => l.id !== layerId));
-    setShapes(prev => prev.map(shape => 
+    setShapes(prev => prev.map(shape =>
       shape.layerId === layerId ? { ...shape, layerId: undefined } : shape
     ));
   }, []);
@@ -265,31 +274,31 @@ function App() {
     const layer = layers.find(l => l.id === layerId);
     if (!layer) return;
 
-    setShapes(prev => prev.map(shape => 
-      shapeIds.includes(shape.id) 
-        ? { ...shape, layerId, color: layer.color } 
+    setShapes(prev => prev.map(shape =>
+      shapeIds.includes(shape.id)
+        ? { ...shape, layerId, color: layer.color }
         : shape
     ));
   }, [layers]);
 
   const handleRemoveShapesFromLayer = useCallback((shapeIds: string[]) => {
-    setShapes(prev => prev.map(shape => 
-      shapeIds.includes(shape.id) 
-        ? { ...shape, layerId: undefined } 
+    setShapes(prev => prev.map(shape =>
+      shapeIds.includes(shape.id)
+        ? { ...shape, layerId: undefined }
         : shape
     ));
   }, []);
 
   const handleToggleLayerVisibility = useCallback((layerId: string) => {
-    setLayers(prev => prev.map(layer => 
+    setLayers(prev => prev.map(layer =>
       layer.id === layerId ? { ...layer, visible: !layer.visible } : layer
     ));
-    
+
     // Also toggle visibility of all shapes in this layer
     setShapes(prev => {
       const layer = layers.find(l => l.id === layerId);
       const newVisible = layer ? !layer.visible : true;
-      return prev.map(shape => 
+      return prev.map(shape =>
         shape.layerId === layerId ? { ...shape, visible: newVisible } : shape
       );
     });
