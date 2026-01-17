@@ -1,42 +1,110 @@
-import { Point, Chain, Contour } from '../models';
-import type { Shape } from '../models';
+import { Point, Chain, Contour, createLayer, LAYER_COLORS } from '../models';
+import type { Shape, Layer } from '../models';
 import type { BinaryShapeParser } from './ShapeParser';
 
 const RecordType = {
+  Header: 0x00,
+  BgnLib: 0x01,
+  LibName: 0x02,
+  Units: 0x03,
+  EndLib: 0x04,
+  BgnStr: 0x05,
+  StrName: 0x06,
+  EndStr: 0x07,
   Boundary: 0x08,
   Path: 0x09,
+  Sref: 0x0a,
+  Aref: 0x0b,
+  Text: 0x0c,
+  Layer: 0x0d,
+  DataType: 0x0e,
+  Width: 0x0f,
   Xy: 0x10,
-  Endel: 0x11
+  Endel: 0x11,
+  SName: 0x12,
+  ColRow: 0x13,
+  TextNode: 0x14,
+  Node: 0x15,
+  TextType: 0x16,
+  Presentation: 0x17,
+  String: 0x19,
+  Strans: 0x1a,
+  Mag: 0x1b,
+  Angle: 0x1c,
+  RefLibs: 0x1f,
+  Fonts: 0x20,
+  PathType: 0x21,
+  Generations: 0x22,
+  AttrTable: 0x23,
+  PropAttr: 0x2b,
+  PropValue: 0x2c,
+  Box: 0x2d,
+  BoxType: 0x2e,
 } as const;
 
 const DataType = {
-  Int4: 0x03
+  NoData: 0x00,
+  BitArray: 0x01,
+  Int2: 0x02,
+  Int4: 0x03,
+  Real4: 0x04,
+  Real8: 0x05,
+  String: 0x06
 } as const;
 
 const RECORD_HEADER_SIZE = 4;
 const COORDINATE_PAIR_SIZE = 8;
 
+export interface Gds2ParseResult {
+  shapes: Shape[];
+  layers: Layer[];
+}
+
 export class Gds2Parser implements BinaryShapeParser {
   parseShapes(input: ArrayBuffer): Shape[] {
+    return this.parseWithLayers(input).shapes;
+  }
+
+  parseWithLayers(input: ArrayBuffer): Gds2ParseResult {
     const view = new DataView(input);
     const shapes: Shape[] = [];
+    const layerMap = new Map<number, Layer>(); // GDS layer number -> Layer
     let offset = 0;
     let currentType: 'boundary' | 'path' | null = null;
     let currentPoints: Point[] = [];
+    let currentGdsLayer: number | null = null;
+
+    const getOrCreateLayer = (gdsLayerNum: number): Layer => {
+      if (!layerMap.has(gdsLayerNum)) {
+        const colorIndex = layerMap.size % LAYER_COLORS.length;
+        const layer = createLayer(
+          `Layer ${gdsLayerNum}`,
+          LAYER_COLORS[colorIndex],
+          gdsLayerNum
+        );
+        layerMap.set(gdsLayerNum, layer);
+      }
+      return layerMap.get(gdsLayerNum)!;
+    };
 
     const finalizeElement = () => {
       if (!currentType) return;
 
       const minPoints = currentType === 'boundary' ? 3 : 2;
       if (currentPoints.length >= minPoints) {
+        // Get or create layer for this GDS layer number
+        const gdsLayerNum = currentGdsLayer ?? 0;
+        const layer = getOrCreateLayer(gdsLayerNum);
+        
         const shape = currentType === 'boundary'
-          ? new Contour(currentPoints)
-          : new Chain(currentPoints);
+          ? new Contour(currentPoints, undefined, layer.color, layer.id)
+          : new Chain(currentPoints, undefined, layer.color, layer.id);
         shapes.push(shape);
       }
 
       currentType = null;
       currentPoints = [];
+      currentGdsLayer = null;
     };
 
     while (offset + RECORD_HEADER_SIZE <= view.byteLength) {
@@ -61,11 +129,19 @@ export class Gds2Parser implements BinaryShapeParser {
           finalizeElement();
           currentType = 'boundary';
           currentPoints = [];
+          currentGdsLayer = null;
           break;
         case RecordType.Path:
           finalizeElement();
           currentType = 'path';
           currentPoints = [];
+          currentGdsLayer = null;
+          break;
+        case RecordType.Layer:
+          // Read layer number (2-byte integer)
+          if (dataType === DataType.Int2 && dataLength >= 2) {
+            currentGdsLayer = view.getInt16(dataOffset, false);
+          }
           break;
         case RecordType.Xy:
           if (currentType && dataLength > 0) {
@@ -95,6 +171,11 @@ export class Gds2Parser implements BinaryShapeParser {
       throw new Error(`Unexpected trailing bytes in GDS2 data. Expected ${view.byteLength} bytes but processed ${offset} bytes.`);
     }
 
-    return shapes;
+    // Convert layer map to array, sorted by GDS layer number
+    const layers = Array.from(layerMap.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([, layer]) => layer);
+
+    return { shapes, layers };
   }
 }

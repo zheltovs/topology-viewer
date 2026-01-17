@@ -1,14 +1,16 @@
-import { useState, useCallback, useEffect } from 'react';
-import { Canvas, ObjectsPanel, Toolbar } from './components';
+import { useState, useCallback } from 'react';
+import { Canvas, SidePanel, Toolbar } from './components';
 import { Point, Chain, Contour } from './models';
-import type { Shape } from './models';
+import type { Shape, Layer } from './models';
 import { CommandHistory, AddShapeCommand, RemoveShapeCommand } from './services';
 import { useKeyboardShortcuts } from './hooks/useKeyboard';
-import { ParserRegistry } from './parsers';
+import { ParserRegistry, Gds2Parser } from './parsers';
 import './App.css';
 
 function App() {
   const [shapes, setShapes] = useState<Shape[]>([]);
+  const [layers, setLayers] = useState<Layer[]>([]);
+  const [selectedShapeIds, setSelectedShapeIds] = useState<string[]>([]);
   const [drawingMode, setDrawingMode] = useState<'chain' | 'contour' | null>(null);
   const [tempPoints, setTempPoints] = useState<Point[]>([]);
   const [showIntersections, setShowIntersections] = useState(false);
@@ -106,6 +108,14 @@ function App() {
   const handleSelectShape = useCallback((shapeId: string) => {
     shapes.forEach(s => s.selected = s.id === shapeId);
     setShapes([...shapes]);
+    setSelectedShapeIds([shapeId]);
+  }, [shapes]);
+
+  // Select multiple shapes (for layers panel)
+  const handleSelectShapes = useCallback((shapeIds: string[]) => {
+    shapes.forEach(s => s.selected = shapeIds.includes(s.id));
+    setShapes([...shapes]);
+    setSelectedShapeIds(shapeIds);
   }, [shapes]);
 
   // Delete shape
@@ -135,14 +145,17 @@ function App() {
       if (!file) return;
 
       try {
-        const newShapes: Shape[] = [];
+        let newShapes: Shape[] = [];
+        let newLayers: Layer[] = [];
         const fileName = file.name.toLowerCase();
         const isGds = fileName.endsWith('.gds') || fileName.endsWith('.gds2');
 
         if (isGds) {
           const buffer = await file.arrayBuffer();
-          const parser = parserRegistry.getBinaryParser('gds2');
-          newShapes.push(...parser.parseShapes(buffer));
+          const gds2Parser = new Gds2Parser();
+          const result = gds2Parser.parseWithLayers(buffer);
+          newShapes = result.shapes;
+          newLayers = result.layers;
         } else {
           const content = await file.text();
           const lines = content.trim().split('\n');
@@ -184,6 +197,8 @@ function App() {
           // Clear command history and set new shapes directly
           commandHistory.clear();
           setShapes(newShapes);
+          setLayers(newLayers);
+          setSelectedShapeIds([]);
           updateHistoryState();
         }
       } catch (error) {
@@ -220,6 +235,66 @@ function App() {
     URL.revokeObjectURL(url);
   }, [shapes]);
 
+  // Layer management handlers
+  const handleLayerCreate = useCallback((layer: Layer) => {
+    setLayers(prev => [...prev, layer]);
+  }, []);
+
+  const handleLayerUpdate = useCallback((layerId: string, updates: Partial<Layer>) => {
+    setLayers(prev => prev.map(layer => 
+      layer.id === layerId ? { ...layer, ...updates } : layer
+    ));
+    
+    // If color changed, update all shapes in this layer
+    if (updates.color) {
+      setShapes(prev => prev.map(shape => 
+        shape.layerId === layerId ? { ...shape, color: updates.color! } : shape
+      ));
+    }
+  }, []);
+
+  const handleLayerDelete = useCallback((layerId: string) => {
+    // Remove layer but keep shapes (unassign them)
+    setLayers(prev => prev.filter(l => l.id !== layerId));
+    setShapes(prev => prev.map(shape => 
+      shape.layerId === layerId ? { ...shape, layerId: undefined } : shape
+    ));
+  }, []);
+
+  const handleAssignShapesToLayer = useCallback((shapeIds: string[], layerId: string) => {
+    const layer = layers.find(l => l.id === layerId);
+    if (!layer) return;
+
+    setShapes(prev => prev.map(shape => 
+      shapeIds.includes(shape.id) 
+        ? { ...shape, layerId, color: layer.color } 
+        : shape
+    ));
+  }, [layers]);
+
+  const handleRemoveShapesFromLayer = useCallback((shapeIds: string[]) => {
+    setShapes(prev => prev.map(shape => 
+      shapeIds.includes(shape.id) 
+        ? { ...shape, layerId: undefined } 
+        : shape
+    ));
+  }, []);
+
+  const handleToggleLayerVisibility = useCallback((layerId: string) => {
+    setLayers(prev => prev.map(layer => 
+      layer.id === layerId ? { ...layer, visible: !layer.visible } : layer
+    ));
+    
+    // Also toggle visibility of all shapes in this layer
+    setShapes(prev => {
+      const layer = layers.find(l => l.id === layerId);
+      const newVisible = layer ? !layer.visible : true;
+      return prev.map(shape => 
+        shape.layerId === layerId ? { ...shape, visible: newVisible } : shape
+      );
+    });
+  }, [layers]);
+
   return (
     <div className="app">
       <Toolbar
@@ -249,12 +324,21 @@ function App() {
           />
         </div>
 
-        <ObjectsPanel
+        <SidePanel
           shapes={shapes}
           onToggleVisibility={handleToggleVisibility}
           onSelectShape={handleSelectShape}
           onDeleteShape={handleDeleteShape}
           onChangeColor={handleChangeColor}
+          layers={layers}
+          selectedShapeIds={selectedShapeIds}
+          onLayerCreate={handleLayerCreate}
+          onLayerUpdate={handleLayerUpdate}
+          onLayerDelete={handleLayerDelete}
+          onAssignShapesToLayer={handleAssignShapesToLayer}
+          onRemoveShapesFromLayer={handleRemoveShapesFromLayer}
+          onSelectShapes={handleSelectShapes}
+          onToggleLayerVisibility={handleToggleLayerVisibility}
         />
       </div>
     </div>
