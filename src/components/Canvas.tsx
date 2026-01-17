@@ -97,8 +97,12 @@ export const Canvas: React.FC<CanvasProps> = ({
     const viewport = getViewportBounds();
 
     // LOD: minimum diagonal size in pixels for a shape to be rendered
-    // At very low zoom levels, skip tiny shapes
-    const minDiagonalPixels = 2; // Shapes smaller than 2 pixels diagonal are skipped
+    // This scales dynamically - at lower zoom levels, we require larger screen size
+    // This creates smooth progressive culling as you zoom out
+    // At scale=1: minDiagonal=6px, at scale=0.1: minDiagonal=12px, at scale=0.01: minDiagonal=18px
+    const baseMinDiagonal = 6;
+    const scaleFactor = Math.max(1, 1 + Math.log10(1 / Math.max(transform.scale, 0.001)));
+    const minDiagonalPixels = baseMinDiagonal * scaleFactor;
 
     return spatialIndexRef.current.queryViewport(viewport, minDiagonalPixels, transform.scale);
   }, [getViewportBounds, transform.scale]);
@@ -455,13 +459,18 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   // Batched rendering for non-selected shapes - reduces draw calls significantly
   const drawShapesBatched = (ctx: CanvasRenderingContext2D, shapesByColor: Map<string, Shape[]>) => {
-    // LOD: Simplify geometry when zoomed out
-    const minPixelDistance = 1.5;
+    // LOD: Simplify geometry when zoomed out - progressive scaling
+    // At scale=1: 4px, at scale=0.1: 8px, at scale=0.01: 12px
+    const basePixelDistance = 4;
+    const distanceScaleFactor = Math.max(1, 1 + Math.log10(1 / Math.max(transform.scale, 0.001)));
+    const minPixelDistance = basePixelDistance * distanceScaleFactor;
     const minWorldDistance = minPixelDistance / transform.scale;
 
-    // Whether to draw individual points (only when zoomed in enough)
-    const shouldDrawPoints = transform.scale > 0.1;
-    const pointSkip = transform.scale < 0.5 ? Math.ceil(1 / (transform.scale * 2)) : 1;
+    // Whether to draw individual points - progressive threshold
+    // Points become noise earlier at low zoom levels
+    const shouldDrawPoints = transform.scale > 1.0;
+    // Progressive point skipping: more aggressive as zoom decreases
+    const pointSkip = transform.scale < 2.0 ? Math.ceil(4 / Math.max(transform.scale, 0.01)) : 1;
 
     for (const [colorKey, shapes] of shapesByColor) {
       if (shapes.length === 0) continue;
@@ -537,8 +546,8 @@ export const Canvas: React.FC<CanvasProps> = ({
           });
         }
 
-        // Draw inner highlights (only when zoomed in more)
-        if (transform.scale > 0.3) {
+        // Draw inner highlights (only at high zoom levels)
+        if (transform.scale > 2.0) {
           ctx.fillStyle = canvasColors.point;
           for (const shape of shapes) {
             shape.points.forEach((point, index) => {
@@ -578,9 +587,11 @@ export const Canvas: React.FC<CanvasProps> = ({
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    // LOD: Simplify geometry when zoomed out
-    // Skip intermediate points if they would be less than 1 pixel apart
-    const minPixelDistance = 1.5; // Minimum pixel distance between rendered points
+    // LOD: Simplify geometry when zoomed out - progressive scaling
+    // At scale=1: 4px, at scale=0.1: 8px, at scale=0.01: 12px
+    const basePixelDistance = 4;
+    const distanceScaleFactor = Math.max(1, 1 + Math.log10(1 / Math.max(transform.scale, 0.001)));
+    const minPixelDistance = basePixelDistance * distanceScaleFactor;
     const minWorldDistance = minPixelDistance / transform.scale;
 
     ctx.beginPath();
@@ -615,12 +626,12 @@ export const Canvas: React.FC<CanvasProps> = ({
     ctx.stroke();
 
     // LOD: Only draw individual points when zoomed in enough
-    // At low zoom levels, drawing points for thousands of shapes is expensive
-    const shouldDrawPoints = transform.scale > 0.1 || isSelected;
+    // Points shown only for selected shapes at low zoom, or when zoomed in
+    const shouldDrawPoints = transform.scale > 1.0 || isSelected;
 
     if (shouldDrawPoints) {
-      // LOD: Reduce point rendering when zoomed out
-      const pointSkip = transform.scale < 0.5 ? Math.ceil(1 / (transform.scale * 2)) : 1;
+      // LOD: Progressive point skipping - more aggressive as zoom decreases
+      const pointSkip = isSelected ? 1 : (transform.scale < 2.0 ? Math.ceil(4 / Math.max(transform.scale, 0.01)) : 1);
 
       shape.points.forEach((point, index) => {
         // Skip some points when zoomed out (but always draw first, last, and selected)
@@ -645,8 +656,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         ctx.arc(screenPoint.x, screenPoint.y, 4, 0, Math.PI * 2);
         ctx.fill();
 
-        // Inner highlight - skip at low zoom levels
-        if (transform.scale > 0.3 || isSelected) {
+        // Inner highlight - only at high zoom levels
+        if (transform.scale > 2.0 || isSelected) {
           ctx.fillStyle = canvasColors.point;
           ctx.beginPath();
           ctx.arc(screenPoint.x, screenPoint.y, 1.5, 0, Math.PI * 2);
