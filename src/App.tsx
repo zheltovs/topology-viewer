@@ -259,6 +259,13 @@ function App() {
         shape.layerId === layerId ? { ...shape, color: updates.color! } : shape
       ));
     }
+
+    // If visibility changed, update all shapes in this layer
+    if (updates.visible !== undefined) {
+      setShapes(prev => prev.map(shape =>
+        shape.layerId === layerId ? { ...shape, visible: updates.visible! } : shape
+      ));
+    }
   }, []);
 
   const handleLayerDelete = useCallback((layerId: string) => {

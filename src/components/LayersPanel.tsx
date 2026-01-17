@@ -99,6 +99,20 @@ const MoveIcon = () => (
   </svg>
 );
 
+const EyeAllIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+
+const EyeOffAllIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+    <line x1="1" y1="1" x2="23" y2="23" />
+  </svg>
+);
+
 export const LayersPanel: React.FC<LayersPanelProps> = ({
   layers,
   shapes,
@@ -191,7 +205,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
       setColorPickerPosition(null);
       return;
     }
-    
+
     const rect = event.currentTarget.getBoundingClientRect();
     setColorPickerPosition({
       top: rect.bottom + 4,
@@ -254,6 +268,22 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     onRemoveShapesFromLayer(selectedShapeIds);
   };
 
+  // Toggle all layers visibility
+  const handleToggleAllLayers = () => {
+    if (layers.length === 0) return;
+
+    const visibleLayers = layers.filter(l => l.visible);
+    const allVisible = visibleLayers.length === layers.length;
+    const allHidden = visibleLayers.length === 0;
+
+    // If all visible, hide all; if all hidden, show all; otherwise hide all
+    const newVisibility = !allVisible;
+
+    layers.forEach(layer => {
+      onLayerUpdate(layer.id, { visible: newVisibility });
+    });
+  };
+
   return (
     <div style={styles.panel}>
       {/* Header with actions */}
@@ -262,13 +292,24 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
           <span>Layers</span>
           <span style={styles.layerCount}>{layers.length}</span>
         </div>
-        <button
-          style={styles.addButton}
-          onClick={handleCreateLayer}
-          title="Create new layer"
-        >
-          <PlusIcon />
-        </button>
+        <div style={styles.headerActions}>
+          {layers.length > 0 && (
+            <button
+              style={styles.toggleAllBtn}
+              onClick={handleToggleAllLayers}
+              title="Toggle all layers visibility"
+            >
+              {layers.some(l => l.visible) ? <EyeAllIcon /> : <EyeOffAllIcon />}
+            </button>
+          )}
+          <button
+            style={styles.addButton}
+            onClick={handleCreateLayer}
+            title="Create new layer"
+          >
+            <PlusIcon />
+          </button>
+        </div>
       </div>
 
       {/* Selection actions */}
@@ -558,7 +599,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
 
       {/* Color picker popup (rendered as portal to avoid clipping) */}
       {showColorPicker && colorPickerPosition && (
-        <div 
+        <div
           ref={colorPickerRef}
           style={{
             ...styles.colorPickerPopup,
@@ -600,6 +641,24 @@ const styles: { [key: string]: React.CSSProperties } = {
     padding: `${tokens.spacing.md} ${tokens.spacing.lg}`,
     borderBottom: `1px solid ${tokens.colors.border.subtle}`,
     backgroundColor: tokens.colors.bg.tertiary,
+  },
+  headerActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacing.sm,
+  },
+  toggleAllBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '28px',
+    height: '28px',
+    border: `1px solid ${tokens.colors.border.default}`,
+    borderRadius: tokens.radius.md,
+    backgroundColor: 'transparent',
+    color: tokens.colors.text.secondary,
+    cursor: 'pointer',
+    transition: `all ${tokens.transitions.fast}`,
   },
   headerTitle: {
     display: 'flex',
