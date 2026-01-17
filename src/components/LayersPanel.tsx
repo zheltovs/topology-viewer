@@ -274,7 +274,6 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
 
     const visibleLayers = layers.filter(l => l.visible);
     const allVisible = visibleLayers.length === layers.length;
-    const allHidden = visibleLayers.length === 0;
 
     // If all visible, hide all; if all hidden, show all; otherwise hide all
     const newVisibility = !allVisible;

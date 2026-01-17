@@ -76,7 +76,6 @@ export class IntersectionDetector {
 
       // Determine left and right endpoints
       const leftX = Math.min(p1.x, p2.x);
-      const rightX = Math.max(p1.x, p2.x);
 
       // Left endpoint event
       const leftPoint = leftX === p1.x ? p1 : p2;
@@ -260,7 +259,6 @@ export class IntersectionDetector {
     if (t >= -this.EPSILON && t <= 1 + this.EPSILON && u >= -this.EPSILON && u <= 1 + this.EPSILON) {
       // Clamp to segment bounds
       const clampedT = Math.max(0, Math.min(1, t));
-      const clampedU = Math.max(0, Math.min(1, u));
 
       const x = seg1.p1.x + clampedT * dx1;
       const y = seg1.p1.y + clampedT * dy1;
@@ -276,12 +274,12 @@ export class IntersectionDetector {
    */
   private static createIntersectionResults(
     intersection: Point | Segment,
-    seg1: Segment,
-    seg2: Segment,
+    _seg1: Segment,
+    _seg2: Segment,
     idx1: number,
     idx2: number,
-    shapeIdx1: number,
-    shapeIdx2: number
+    _shapeIdx1: number,
+    _shapeIdx2: number
   ): IntersectionResult[] {
     const results: IntersectionResult[] = [];
 

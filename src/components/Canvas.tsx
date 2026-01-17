@@ -1,9 +1,11 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import type { Shape } from '../models';
 import { Point, ShapeType } from '../models';
-import { IntersectionDetector, IntersectionType, SpatialIndex } from '../services';
-import type { IntersectionResult, BoundingBox } from '../services';
+import { IntersectionType, SpatialIndex } from '../services';
+import type { BoundingBox } from '../services';
 import { tokens } from '../styles';
+import IntersectionWorker from '../workers/intersectionWorker?worker';
+import type { IntersectionWorkerResponse, SerializedIntersectionResult } from '../workers/intersectionWorker';
 
 // Dark theme canvas colors
 const canvasColors = {
@@ -36,6 +38,7 @@ interface CanvasProps {
   tempPoints: Point[];
   showIntersections?: boolean;
   showStats?: boolean;
+  onIntersectionProgress?: (progress: number | null) => void;
 }
 
 interface ViewTransform {
@@ -50,7 +53,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   drawingMode,
   tempPoints,
   showIntersections = false,
-  showStats = false
+  showStats = false,
+  onIntersectionProgress
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [transform, setTransform] = useState<ViewTransform>({
@@ -61,7 +65,10 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [isPanning, setIsPanning] = useState(false);
   const [lastMousePos, setLastMousePos] = useState<{ x: number; y: number } | null>(null);
   const [mouseWorldPos, setMouseWorldPos] = useState<Point | null>(null);
-  const [intersections, setIntersections] = useState<IntersectionResult[]>([]);
+  const [intersections, setIntersections] = useState<SerializedIntersectionResult[]>([]);
+
+  // Web Worker reference for intersection detection
+  const workerRef = useRef<Worker | null>(null);
 
   // Spatial index for efficient viewport culling
   const spatialIndexRef = useRef<SpatialIndex>(new SpatialIndex());
@@ -244,15 +251,55 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
   }, [handleWheel, handleMouseDown, handleMouseMove, handleMouseUp]);
 
-  // Compute intersections when shapes or visibility changes
+  // Compute intersections in Web Worker when shapes or visibility changes
   useEffect(() => {
     if (showIntersections) {
-      const intersections = IntersectionDetector.findAllIntersectionsSimple(shapes);
-      setIntersections(intersections);
+      // Terminate any existing worker
+      if (workerRef.current) {
+        workerRef.current.terminate();
+      }
+
+      // Create new worker
+      const worker = new IntersectionWorker();
+      workerRef.current = worker;
+
+      // Report initial progress
+      onIntersectionProgress?.(0);
+
+      // Handle worker messages
+      worker.onmessage = (event: MessageEvent<IntersectionWorkerResponse>) => {
+        const { type, progress, results } = event.data;
+
+        if (type === 'progress') {
+          onIntersectionProgress?.(progress ?? 0);
+        } else if (type === 'complete') {
+          setIntersections(results ?? []);
+          onIntersectionProgress?.(null); // Hide progress bar
+        }
+      };
+
+      // Serialize shapes for worker
+      const serializedShapes = shapes.map(shape => ({
+        id: shape.id,
+        points: shape.points.map(p => ({ x: p.x, y: p.y })),
+        visible: shape.visible,
+        type: shape.type,
+        color: shape.color
+      }));
+
+      // Start intersection detection
+      worker.postMessage({ type: 'start', shapes: serializedShapes });
+
+      // Cleanup on unmount or when effect re-runs
+      return () => {
+        worker.terminate();
+        workerRef.current = null;
+      };
     } else {
       setIntersections([]);
+      onIntersectionProgress?.(null);
     }
-  }, [shapes, showIntersections]);
+  }, [shapes, showIntersections, onIntersectionProgress]);
 
   // Drawing function
   useEffect(() => {
@@ -729,7 +776,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   };
 
   const drawIntersections = (ctx: CanvasRenderingContext2D) => {
-    intersections.forEach((intersection: IntersectionResult) => {
+    intersections.forEach((intersection: SerializedIntersectionResult) => {
       if (intersection.type === IntersectionType.POINT && intersection.point) {
         const screenPos = worldToScreen(intersection.point.x, intersection.point.y);
 

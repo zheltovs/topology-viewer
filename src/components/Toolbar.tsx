@@ -12,6 +12,7 @@ interface ToolbarProps {
   onRedo: () => void;
   showIntersections?: boolean;
   onToggleIntersections?: () => void;
+  intersectionProgress?: number | null;
 }
 
 // Icon components for clean, modern look
@@ -82,7 +83,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onUndo,
   onRedo,
   showIntersections = false,
-  onToggleIntersections
+  onToggleIntersections,
+  intersectionProgress
 }) => {
   return (
     <div style={styles.toolbar}>
@@ -193,6 +195,24 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Progress Bar for Intersection Detection - next to Export button */}
+      {intersectionProgress !== null && intersectionProgress !== undefined && (
+        <div style={styles.progressContainer}>
+          <div style={styles.progressLabel}>
+            <span>Finding intersections...</span>
+            <span>{intersectionProgress}%</span>
+          </div>
+          <div style={styles.progressBar}>
+            <div
+              style={{
+                ...styles.progressFill,
+                width: `${intersectionProgress}%`
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Status / Hints */}
       <div style={styles.statusArea}>
@@ -330,5 +350,32 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: '50%',
     backgroundColor: tokens.colors.accent.danger,
     animation: 'pulse 2s infinite',
+  },
+  progressContainer: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '4px',
+    minWidth: '180px',
+    padding: `${tokens.spacing.xs} ${tokens.spacing.md}`,
+    backgroundColor: tokens.colors.bg.tertiary,
+    borderRadius: tokens.radius.md,
+  },
+  progressLabel: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    fontSize: tokens.typography.fontSize.xs,
+    color: tokens.colors.text.secondary,
+  },
+  progressBar: {
+    height: '4px',
+    backgroundColor: tokens.colors.border.subtle,
+    borderRadius: '2px',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    background: 'linear-gradient(90deg, rgba(0, 191, 255, 0.3) 0%, rgba(0, 229, 255, 0.6) 50%, #00e5ff 80%, #00ffff 100%)',
+    borderRadius: '2px',
+    transition: 'width 0.15s ease-out',
   },
 };
