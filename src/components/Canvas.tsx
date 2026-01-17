@@ -31,6 +31,13 @@ const canvasColors = {
   intersectionGlow: 'rgba(255, 0, 0, 0.25)',
 };
 
+export type IntersectionPhase = 'finding' | 'deduplication';
+
+export interface IntersectionProgressInfo {
+  progress: number;
+  phase: IntersectionPhase;
+}
+
 interface CanvasProps {
   shapes: Shape[];
   onAddPoint?: (point: Point) => void;
@@ -38,7 +45,7 @@ interface CanvasProps {
   tempPoints: Point[];
   showIntersections?: boolean;
   showStats?: boolean;
-  onIntersectionProgress?: (progress: number | null) => void;
+  onIntersectionProgress?: (info: IntersectionProgressInfo | null) => void;
 }
 
 interface ViewTransform {
@@ -264,14 +271,17 @@ export const Canvas: React.FC<CanvasProps> = ({
       workerRef.current = worker;
 
       // Report initial progress
-      onIntersectionProgress?.(0);
+      onIntersectionProgress?.({ progress: 0, phase: 'finding' });
 
       // Handle worker messages
       worker.onmessage = (event: MessageEvent<IntersectionWorkerResponse>) => {
-        const { type, progress, results } = event.data;
+        const { type, progress, phase, results } = event.data;
 
         if (type === 'progress') {
-          onIntersectionProgress?.(progress ?? 0);
+          onIntersectionProgress?.({
+            progress: progress ?? 0,
+            phase: phase ?? 'finding'
+          });
         } else if (type === 'complete') {
           setIntersections(results ?? []);
           onIntersectionProgress?.(null); // Hide progress bar

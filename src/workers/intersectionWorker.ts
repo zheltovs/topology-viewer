@@ -127,9 +127,12 @@ export interface IntersectionWorkerMessage {
   shapes: SerializedShape[];
 }
 
+export type WorkerPhase = 'finding' | 'deduplication';
+
 export interface IntersectionWorkerResponse {
   type: 'progress' | 'complete';
   progress?: number;
+  phase?: WorkerPhase;
   results?: SerializedIntersectionResult[];
 }
 
@@ -156,10 +159,11 @@ function findAllIntersectionsWithProgress(shapes: SerializedShape[]): void {
   let processedPairs = 0;
   let lastReportedProgress = 0;
 
-  // Report initial progress
+  // Report initial progress for finding phase
   self.postMessage({
     type: 'progress',
-    progress: 0
+    progress: 0,
+    phase: 'finding'
   } as IntersectionWorkerResponse);
 
   // Check all pairs
@@ -170,14 +174,15 @@ function findAllIntersectionsWithProgress(shapes: SerializedShape[]): void {
 
       processedPairs++;
 
-      // Report progress every 2%, cap at 99% until complete
+      // Report progress every 2%
       const rawProgress = (processedPairs / totalPairs) * 100;
-      const currentProgress = Math.min(99, Math.floor(rawProgress));
+      const currentProgress = Math.floor(rawProgress);
       if (currentProgress >= lastReportedProgress + 2) {
         lastReportedProgress = currentProgress;
         self.postMessage({
           type: 'progress',
-          progress: currentProgress
+          progress: currentProgress,
+          phase: 'finding'
         } as IntersectionWorkerResponse);
       }
 
@@ -202,8 +207,15 @@ function findAllIntersectionsWithProgress(shapes: SerializedShape[]): void {
     }
   }
 
+  // Report 100% for finding phase before starting deduplication
+  self.postMessage({
+    type: 'progress',
+    progress: 100,
+    phase: 'finding'
+  } as IntersectionWorkerResponse);
+
   // Deduplicate and return results
-  const uniqueResults = deduplicateSerializedResults(results);
+  const uniqueResults = deduplicateSerializedResultsWithProgress(results);
 
   self.postMessage({
     type: 'complete',
@@ -212,12 +224,36 @@ function findAllIntersectionsWithProgress(shapes: SerializedShape[]): void {
 }
 
 /**
- * Deduplicate serialized intersection results
+ * Deduplicate serialized intersection results with progress reporting
  */
-function deduplicateSerializedResults(results: SerializedIntersectionResult[]): SerializedIntersectionResult[] {
+function deduplicateSerializedResultsWithProgress(results: SerializedIntersectionResult[]): SerializedIntersectionResult[] {
   const uniqueResults: SerializedIntersectionResult[] = [];
+  const totalResults = results.length;
+  let processedResults = 0;
+  let lastReportedProgress = 0;
+
+  // Report initial progress for deduplication phase
+  self.postMessage({
+    type: 'progress',
+    progress: 0,
+    phase: 'deduplication'
+  } as IntersectionWorkerResponse);
 
   for (const result of results) {
+    processedResults++;
+
+    // Report progress every 2%
+    const rawProgress = (processedResults / totalResults) * 100;
+    const currentProgress = Math.floor(rawProgress);
+    if (currentProgress >= lastReportedProgress + 2) {
+      lastReportedProgress = currentProgress;
+      self.postMessage({
+        type: 'progress',
+        progress: currentProgress,
+        phase: 'deduplication'
+      } as IntersectionWorkerResponse);
+    }
+
     let isDuplicate = false;
 
     for (const existing of uniqueResults) {
@@ -237,6 +273,13 @@ function deduplicateSerializedResults(results: SerializedIntersectionResult[]): 
       uniqueResults.push(result);
     }
   }
+
+  // Report 100% for deduplication phase
+  self.postMessage({
+    type: 'progress',
+    progress: 100,
+    phase: 'deduplication'
+  } as IntersectionWorkerResponse);
 
   return uniqueResults;
 }

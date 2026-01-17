@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { Canvas, SidePanel, Toolbar } from './components';
+import type { IntersectionProgressInfo } from './components/Canvas';
 import { Point, Chain, Contour } from './models';
 import type { Shape, Layer } from './models';
 import { CommandHistory, AddShapeCommand, RemoveShapeCommand } from './services';
@@ -14,7 +15,7 @@ function App() {
   const [drawingMode, setDrawingMode] = useState<'chain' | 'contour' | null>(null);
   const [tempPoints, setTempPoints] = useState<Point[]>([]);
   const [showIntersections, setShowIntersections] = useState(false);
-  const [intersectionProgress, setIntersectionProgress] = useState<number | null>(null);
+  const [intersectionProgress, setIntersectionProgress] = useState<IntersectionProgressInfo | null>(null);
   const [showStats, setShowStats] = useState(false);
   const [commandHistory] = useState(() => {
     const history = new CommandHistory();

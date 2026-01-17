@@ -1,5 +1,6 @@
 import React from 'react';
 import { tokens } from '../styles';
+import type { IntersectionProgressInfo } from './Canvas';
 
 interface ToolbarProps {
   drawingMode: 'chain' | 'contour' | null;
@@ -12,7 +13,7 @@ interface ToolbarProps {
   onRedo: () => void;
   showIntersections?: boolean;
   onToggleIntersections?: () => void;
-  intersectionProgress?: number | null;
+  intersectionProgress?: IntersectionProgressInfo | null;
 }
 
 // Icon components for clean, modern look
@@ -200,14 +201,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       {intersectionProgress !== null && intersectionProgress !== undefined && (
         <div style={styles.progressContainer}>
           <div style={styles.progressLabel}>
-            <span>Finding intersections...</span>
-            <span>{intersectionProgress}%</span>
+            <span>
+              {intersectionProgress.phase === 'finding'
+                ? 'Finding intersections...'
+                : 'Deduplication...'}
+            </span>
+            <span>{intersectionProgress.progress}%</span>
           </div>
           <div style={styles.progressBar}>
             <div
               style={{
                 ...styles.progressFill,
-                width: `${intersectionProgress}%`
+                width: `${intersectionProgress.progress}%`
               }}
             />
           </div>
