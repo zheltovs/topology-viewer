@@ -1,4 +1,4 @@
-import { Point } from '../models';
+import { Point, ShapeType } from '../models';
 import type { Shape } from '../models';
 
 const EPS = 1e-9;
@@ -9,6 +9,7 @@ interface Segment {
   shapeId: string;
   index: number;
   segmentCount: number;
+  isContour: boolean;
   p1: Point;
   p2: Point;
   left: Point;
@@ -250,6 +251,21 @@ const segmentYAtX = (segment: Segment, x: number): number => {
 const inRange = (value: number, min: number, max: number): boolean =>
   value >= min - EPS && value <= max + EPS;
 
+const isEndpoint = (segment: Segment, point: Point): boolean =>
+  (almostEqual(point.x, segment.p1.x) && almostEqual(point.y, segment.p1.y)) ||
+  (almostEqual(point.x, segment.p2.x) && almostEqual(point.y, segment.p2.y));
+
+const areAdjacentSegments = (segA: Segment, segB: Segment): boolean => {
+  if (segA.shapeId !== segB.shapeId) return false;
+  const diff = Math.abs(segA.index - segB.index);
+  if (diff === 1) return true;
+  if (segA.isContour && diff === segA.segmentCount - 1) return true;
+  return false;
+};
+
+const shouldSkipEndpointIntersection = (segA: Segment, segB: Segment, point: Point): boolean =>
+  areAdjacentSegments(segA, segB) && isEndpoint(segA, point) && isEndpoint(segB, point);
+
 const intersectionPoint = (segA: Segment, segB: Segment): Point | null => {
   const x1 = segA.p1.x;
   const y1 = segA.p1.y;
@@ -305,6 +321,7 @@ const buildSegments = (shapes: Shape[]): Segment[] => {
         shapeId: shape.id,
         index: i - 1,
         segmentCount,
+        isContour: shape.type === ShapeType.CONTOUR,
         p1,
         p2,
         left,
@@ -354,8 +371,10 @@ const findSweepIntersections = (segments: Segment[], pointMap: Map<string, Point
 
   const eventQueue = new MinHeap<IntersectionEvent>((a, b) => {
     if (!almostEqual(a.x, b.x)) return a.x - b.x;
+    const priorityDiff = eventPriority(a.type) - eventPriority(b.type);
+    if (priorityDiff !== 0) return priorityDiff;
     if (!almostEqual(a.y, b.y)) return a.y - b.y;
-    return eventPriority(a.type) - eventPriority(b.type);
+    return 0;
   });
 
   const scheduledPairs = new Set<string>();
@@ -364,6 +383,7 @@ const findSweepIntersections = (segments: Segment[], pointMap: Map<string, Point
     if (!segA || !segB) return;
     const point = intersectionPoint(segA, segB);
     if (!point) return;
+    if (shouldSkipEndpointIntersection(segA, segB, point)) return;
     if (point.x < sweepX - EPS) return;
     if (almostEqual(point.x, sweepX) && point.y < currentY - EPS) return;
     const key = segA.id < segB.id ? `${segA.id}|${segB.id}` : `${segB.id}|${segA.id}`;
@@ -438,7 +458,7 @@ const findSweepIntersections = (segments: Segment[], pointMap: Map<string, Point
       const candidates = active.rangeSearch(vertical.minY, vertical.maxY, seg => segmentYAtX(seg, vertical.p1.x));
       candidates.forEach(seg => {
         const point = intersectionPoint(vertical, seg);
-        if (point) {
+        if (point && !shouldSkipEndpointIntersection(vertical, seg, point)) {
           pointMap.set(pointKey(point), point);
         }
       });
