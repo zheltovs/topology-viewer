@@ -1,6 +1,8 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import type { Shape } from '../models';
 import { Point, ShapeType } from '../models';
+import { IntersectionDetector, IntersectionType } from '../services';
+import type { IntersectionResult } from '../services';
 import { tokens } from '../styles';
 
 // Dark theme canvas colors
@@ -22,6 +24,9 @@ const canvasColors = {
   cursor: '#f4212e',
   cursorLabel: '#f7f9f9',
   point: '#f7f9f9',
+  intersection: '#ff0000',
+  intersectionFill: 'rgba(255, 0, 0, 0.3)',
+  intersectionGlow: 'rgba(255, 0, 0, 0.25)',
 };
 
 interface CanvasProps {
@@ -29,6 +34,7 @@ interface CanvasProps {
   onAddPoint?: (point: Point) => void;
   drawingMode: 'chain' | 'contour' | null;
   tempPoints: Point[];
+  showIntersections?: boolean;
 }
 
 interface ViewTransform {
@@ -41,7 +47,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   shapes,
   onAddPoint,
   drawingMode,
-  tempPoints
+  tempPoints,
+  showIntersections = false
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [transform, setTransform] = useState<ViewTransform>({
@@ -52,6 +59,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [isPanning, setIsPanning] = useState(false);
   const [lastMousePos, setLastMousePos] = useState<{ x: number; y: number } | null>(null);
   const [mouseWorldPos, setMouseWorldPos] = useState<Point | null>(null);
+  const [intersections, setIntersections] = useState<IntersectionResult[]>([]);
 
   // Convert screen coordinates to world coordinates
   const screenToWorld = useCallback((screenX: number, screenY: number): Point => {
@@ -180,6 +188,16 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
   }, [handleWheel, handleMouseDown, handleMouseMove, handleMouseUp]);
 
+  // Compute intersections when shapes or visibility changes
+  useEffect(() => {
+    if (showIntersections) {
+      const intersections = IntersectionDetector.findAllIntersectionsSimple(shapes);
+      setIntersections(intersections);
+    } else {
+      setIntersections([]);
+    }
+  }, [shapes, showIntersections]);
+
   // Drawing function
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -209,6 +227,11 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
     });
 
+    // Draw intersections if enabled
+    if (showIntersections && intersections.length > 0) {
+      drawIntersections(ctx);
+    }
+
     // Draw temporary points during drawing
     if (tempPoints.length > 0) {
       drawTempShape(ctx, tempPoints, drawingMode === 'contour');
@@ -221,7 +244,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     // Restore context
     ctx.restore();
-  }, [shapes, transform, tempPoints, drawingMode, mouseWorldPos, worldToScreen]);
+  }, [shapes, transform, tempPoints, drawingMode, mouseWorldPos, worldToScreen, showIntersections, intersections]);
 
   const drawGrid = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
     // Calculate grid spacing based on scale - use fixed world units
@@ -467,6 +490,58 @@ export const Canvas: React.FC<CanvasProps> = ({
       ctx.beginPath();
       ctx.arc(screenPoint.x, screenPoint.y, 2, 0, Math.PI * 2);
       ctx.fill();
+    });
+  };
+
+  const drawIntersections = (ctx: CanvasRenderingContext2D) => {
+    intersections.forEach((intersection: IntersectionResult) => {
+      if (intersection.type === IntersectionType.POINT && intersection.point) {
+        const screenPos = worldToScreen(intersection.point.x, intersection.point.y);
+
+        // Outer glow
+        ctx.fillStyle = canvasColors.intersectionFill;
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, 12, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Main point - bright red
+        ctx.fillStyle = canvasColors.intersection;
+        ctx.shadowColor = canvasColors.intersection;
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Inner highlight
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (intersection.type === IntersectionType.OVERLAP && intersection.segment) {
+        const p1Screen = worldToScreen(intersection.segment.p1.x, intersection.segment.p1.y);
+        const p2Screen = worldToScreen(intersection.segment.p2.x, intersection.segment.p2.y);
+
+        // Glow for overlapping segment
+        ctx.strokeStyle = canvasColors.intersectionGlow;
+        ctx.lineWidth = 8;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(p1Screen.x, p1Screen.y);
+        ctx.lineTo(p2Screen.x, p2Screen.y);
+        ctx.stroke();
+
+        // Main overlapping segment - bright red
+        ctx.strokeStyle = canvasColors.intersection;
+        ctx.lineWidth = 4;
+        ctx.shadowColor = canvasColors.intersection;
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.moveTo(p1Screen.x, p1Screen.y);
+        ctx.lineTo(p2Screen.x, p2Screen.y);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+      }
     });
   };
 
