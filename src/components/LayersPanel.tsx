@@ -192,8 +192,12 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
       const rangeIds = allShapeIds.slice(start, end + 1);
       onSelectShapes([...new Set([...selectedShapeIds, ...rangeIds])]);
     } else {
-      // Single select
-      onSelectShapes([shapeId]);
+      // Single select - toggle if already selected
+      if (selectedShapeIds.length === 1 && selectedShapeIds[0] === shapeId) {
+        onSelectShapes([]);
+      } else {
+        onSelectShapes([shapeId]);
+      }
     }
   };
 
