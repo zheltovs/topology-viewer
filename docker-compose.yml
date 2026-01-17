@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  # Development service
+  topology-viewer-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: topology-viewer-dev
+    ports:
+      - "5173:5173"
+    volumes:
+      # Mount source code for hot reload
+      - ./src:/app/src
+      - ./public:/app/public
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+    stdin_open: true
+    tty: true
+    profiles:
+      - dev
+
+  # Production service
+  topology-viewer-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: topology-viewer-prod
+    ports:
+      - "80:80"
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    profiles:
+      - prod
+
+  # Development with watch mode (alternative)
+  topology-viewer-watch:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: topology-viewer-watch
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+    command: npm run dev -- --host 0.0.0.0
+    profiles:
+      - watch
