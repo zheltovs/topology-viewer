@@ -1,11 +1,19 @@
 import { useState, useCallback } from 'react';
-import { Canvas, SidePanel, Toolbar } from './components';
+import { Canvas, SidePanel, Toolbar, GdsImportDialog } from './components';
 import { Point, Chain, Contour } from './models';
 import type { Shape, Layer } from './models';
 import { CommandHistory, AddShapeCommand, RemoveShapeCommand } from './services';
 import { useKeyboardShortcuts } from './hooks/useKeyboard';
 import { ParserRegistry, Gds2Parser } from './parsers';
 import './App.css';
+
+// State for GDS import dialog
+interface GdsImportState {
+  isOpen: boolean;
+  layers: Layer[];
+  objectCounts: Map<string, number>;
+  fileBuffer: ArrayBuffer | null;
+}
 
 function App() {
   const [shapes, setShapes] = useState<Shape[]>([]);
@@ -21,6 +29,12 @@ function App() {
   });
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  const [gdsImportState, setGdsImportState] = useState<GdsImportState>({
+    isOpen: false,
+    layers: [],
+    objectCounts: new Map(),
+    fileBuffer: null
+  });
   const parserRegistry = new ParserRegistry();
 
   // Update undo/redo state
@@ -153,21 +167,27 @@ function App() {
       if (!file) return;
 
       try {
-        let newShapes: Shape[] = [];
-        let newLayers: Layer[] = [];
         const fileName = file.name.toLowerCase();
         const isGds = fileName.endsWith('.gds') || fileName.endsWith('.gds2');
 
         if (isGds) {
+          // For GDS files, show layer selection dialog first
           const buffer = await file.arrayBuffer();
           const gds2Parser = new Gds2Parser();
-          const result = gds2Parser.parseWithLayers(buffer);
-          newShapes = result.shapes;
-          newLayers = result.layers;
+          const layerInfo = gds2Parser.scanLayers(buffer);
+          
+          setGdsImportState({
+            isOpen: true,
+            layers: layerInfo.layers,
+            objectCounts: layerInfo.objectCounts,
+            fileBuffer: buffer
+          });
         } else {
+          // For other files, import directly
           const content = await file.text();
           const lines = content.trim().split('\n');
           const parser = parserRegistry.getParser();
+          const newShapes: Shape[] = [];
 
           // First, parse all shapes from the file
           for (const line of lines) {
@@ -198,16 +218,15 @@ function App() {
 
             newShapes.push(newShape);
           }
-        }
 
-        // Clear existing shapes and add all imported shapes
-        if (newShapes.length > 0) {
-          // Clear command history and set new shapes directly
-          commandHistory.clear();
-          setShapes(newShapes);
-          setLayers(newLayers);
-          setSelectedShapeIds([]);
-          updateHistoryState();
+          // Clear existing shapes and add all imported shapes
+          if (newShapes.length > 0) {
+            commandHistory.clear();
+            setShapes(newShapes);
+            setLayers([]);
+            setSelectedShapeIds([]);
+            updateHistoryState();
+          }
         }
       } catch (error) {
         alert(`Error reading file: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -216,6 +235,43 @@ function App() {
 
     input.click();
   }, [commandHistory, updateHistoryState, parserRegistry]);
+
+  // Handle GDS import confirmation
+  const handleGdsImportConfirm = useCallback((selectedLayerIds: string[]) => {
+    if (!gdsImportState.fileBuffer || selectedLayerIds.length === 0) {
+      setGdsImportState({ isOpen: false, layers: [], objectCounts: new Map(), fileBuffer: null });
+      return;
+    }
+
+    try {
+      const gds2Parser = new Gds2Parser();
+      const allowedLayerIds = new Set(selectedLayerIds);
+      const layerMap = new Map<string, Layer>(gdsImportState.layers.map(l => [l.id, l]));
+      
+      const result = gds2Parser.parseWithLayerFilter(
+        gdsImportState.fileBuffer,
+        allowedLayerIds,
+        layerMap
+      );
+
+      if (result.shapes.length > 0) {
+        commandHistory.clear();
+        setShapes(result.shapes);
+        setLayers(result.layers);
+        setSelectedShapeIds([]);
+        updateHistoryState();
+      }
+    } catch (error) {
+      alert(`Error importing GDS: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+
+    setGdsImportState({ isOpen: false, layers: [], objectCounts: new Map(), fileBuffer: null });
+  }, [gdsImportState.fileBuffer, gdsImportState.layers, commandHistory, updateHistoryState]);
+
+  // Handle GDS import cancellation
+  const handleGdsImportCancel = useCallback(() => {
+    setGdsImportState({ isOpen: false, layers: [], objectCounts: new Map(), fileBuffer: null });
+  }, []);
 
   // Handle export to file
   const handleExport = useCallback(() => {
@@ -356,6 +412,15 @@ function App() {
           onToggleLayerVisibility={handleToggleLayerVisibility}
         />
       </div>
+
+      {gdsImportState.isOpen && (
+        <GdsImportDialog
+          layers={gdsImportState.layers}
+          objectCounts={gdsImportState.objectCounts}
+          onConfirm={handleGdsImportConfirm}
+          onCancel={handleGdsImportCancel}
+        />
+      )}
     </div>
   );
 }
