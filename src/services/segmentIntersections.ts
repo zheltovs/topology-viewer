@@ -259,7 +259,7 @@ const areAdjacentSegments = (segA: Segment, segB: Segment): boolean => {
   if (segA.shapeId !== segB.shapeId) return false;
   const diff = Math.abs(segA.index - segB.index);
   if (diff === 1) return true;
-  if (segA.isContour && diff === segA.segmentCount - 1) return true;
+  if (segA.isContour && segB.isContour && diff === segA.segmentCount - 1) return true;
   return false;
 };
 
