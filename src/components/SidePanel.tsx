@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import type { Shape, Layer } from '../models';
 import { ObjectsPanel } from './ObjectsPanel';
 import { LayersPanel } from './LayersPanel';
 import { tokens } from '../styles';
+
+const MIN_PANEL_WIDTH = 280;
+const DEFAULT_PANEL_WIDTH = 320;
 
 interface SidePanelProps {
   // Common
@@ -62,9 +65,46 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   onToggleLayerVisibility,
 }) => {
   const [activeTab, setActiveTab] = useState<TabId>('objects');
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const [isResizing, setIsResizing] = useState(false);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const maxWidth = window.innerWidth * 0.4; // 40% max
+      const newWidth = window.innerWidth - e.clientX;
+      setPanelWidth(Math.max(MIN_PANEL_WIDTH, Math.min(maxWidth, newWidth)));
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
 
   return (
-    <div style={styles.panel}>
+    <div style={{ ...styles.panel, width: panelWidth }}>
+      {/* Resize handle */}
+      <div
+        style={{
+          ...styles.resizeHandle,
+          ...(isResizing ? styles.resizeHandleActive : {})
+        }}
+        onMouseDown={handleMouseDown}
+      />
       {/* Tab bar */}
       <div style={styles.tabBar}>
         <button
@@ -123,13 +163,28 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
 const styles: { [key: string]: React.CSSProperties } = {
   panel: {
-    width: tokens.components.sidebar.width,
+    position: 'relative',
     height: '100%',
     backgroundColor: tokens.colors.bg.secondary,
     borderLeft: `1px solid ${tokens.colors.border.subtle}`,
     display: 'flex',
     flexDirection: 'column',
     fontFamily: tokens.typography.fontFamily.sans,
+    flexShrink: 0,
+  },
+  resizeHandle: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: '4px',
+    cursor: 'ew-resize',
+    backgroundColor: 'transparent',
+    transition: 'background-color 0.15s',
+    zIndex: 10,
+  },
+  resizeHandleActive: {
+    backgroundColor: tokens.colors.accent.primary,
   },
   tabBar: {
     display: 'flex',

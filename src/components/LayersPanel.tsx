@@ -393,7 +393,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                         <span style={styles.layerStat}><ChainIcon color={layer.color} />{chainCount}</span>
                         <span style={styles.layerStat}><PointIcon color={tokens.colors.text.tertiary} />{layerShapes.reduce((sum, s) => sum + s.points.length, 0)}</span>
                         {layer.gdsLayerNumber !== undefined && (
-                          <span style={styles.gdsNumber}>GDS: {layer.gdsLayerNumber}</span>
+                          <span style={styles.gdsNumber} title="GDS2 layer number from imported file">L{layer.gdsLayerNumber}</span>
                         )}
                       </span>
                     </>
@@ -837,16 +837,23 @@ const styles: { [key: string]: React.CSSProperties } = {
     gap: tokens.spacing.sm,
     fontSize: tokens.typography.fontSize.xs,
     color: tokens.colors.text.tertiary,
+    flexWrap: 'wrap',
   },
   layerStat: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: '2px',
+    flexShrink: 0,
   },
   gdsNumber: {
-    padding: '1px 6px',
-    backgroundColor: tokens.colors.bg.secondary,
+    padding: '1px 4px',
+    backgroundColor: 'rgba(121, 75, 196, 0.2)',
+    color: '#a78bda',
     borderRadius: '3px',
+    fontSize: '10px',
+    fontWeight: tokens.typography.fontWeight.medium,
+    flexShrink: 0,
+    whiteSpace: 'nowrap',
   },
   editInput: {
     width: '100%',
