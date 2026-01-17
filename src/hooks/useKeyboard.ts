@@ -52,5 +52,3 @@ export const useKeyboardShortcuts = (handlers: {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []); // Empty deps - handlers accessed via ref
 };
-
-
