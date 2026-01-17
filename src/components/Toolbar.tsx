@@ -1,6 +1,13 @@
 import React from 'react';
 import { tokens } from '../styles';
 
+export interface ImportProgress {
+  isActive: boolean;
+  progress: number;
+  processed: number;
+  total: number;
+}
+
 interface ToolbarProps {
   drawingMode: 'chain' | 'contour' | null;
   onSetDrawingMode: (mode: 'chain' | 'contour' | null) => void;
@@ -12,6 +19,7 @@ interface ToolbarProps {
   onRedo: () => void;
   showIntersections?: boolean;
   onToggleIntersections?: () => void;
+  importProgress?: ImportProgress;
 }
 
 // Icon components for clean, modern look
@@ -82,7 +90,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onUndo,
   onRedo,
   showIntersections = false,
-  onToggleIntersections
+  onToggleIntersections,
+  importProgress
 }) => {
   return (
     <div style={styles.toolbar}>
@@ -175,6 +184,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <button
             className="toolbar-btn"
             onClick={onImport}
+            disabled={importProgress?.isActive}
             title="Import from file (.txt, .csv, .gds, .gds2)"
           >
             <ImportIcon />
@@ -191,9 +201,33 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         </div>
       </div>
 
+      {/* Import Progress Bar */}
+      {importProgress?.isActive && (
+        <>
+          <div style={styles.divider} />
+          <div style={styles.progressContainer}>
+            <div style={styles.progressInfo}>
+              <span style={styles.progressLabel}>Importing...</span>
+              <span style={styles.progressPercent}>{importProgress.progress}%</span>
+            </div>
+            <div style={styles.progressBarBg}>
+              <div
+                style={{
+                  ...styles.progressBarFill,
+                  width: `${importProgress.progress}%`
+                }}
+              />
+            </div>
+            <span style={styles.progressCount}>
+              {importProgress.processed.toLocaleString()} / {importProgress.total.toLocaleString()}
+            </span>
+          </div>
+        </>
+      )}
+
       {/* Status / Hints */}
       <div style={styles.statusArea}>
-        {drawingMode && (
+        {drawingMode && !importProgress?.isActive && (
           <div style={styles.hint}>
             <div style={styles.hintDot} />
             <span>
@@ -327,5 +361,52 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: '50%',
     backgroundColor: tokens.colors.accent.danger,
     animation: 'pulse 2s infinite',
+  },
+  // Progress bar styles
+  progressContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacing.sm,
+    padding: `${tokens.spacing.xs} ${tokens.spacing.md}`,
+    backgroundColor: tokens.colors.bg.tertiary,
+    borderRadius: tokens.radius.md,
+    minWidth: '200px',
+  },
+  progressInfo: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '2px',
+    minWidth: '70px',
+  },
+  progressLabel: {
+    fontSize: '11px',
+    fontWeight: 500,
+    color: tokens.colors.accent.primary,
+  },
+  progressPercent: {
+    fontSize: '10px',
+    fontWeight: 600,
+    color: tokens.colors.text.secondary,
+    fontFamily: tokens.typography.fontFamily.mono,
+  },
+  progressBarBg: {
+    flex: 1,
+    height: '6px',
+    backgroundColor: tokens.colors.bg.primary,
+    borderRadius: '3px',
+    overflow: 'hidden',
+    minWidth: '80px',
+  },
+  progressBarFill: {
+    height: '100%',
+    background: `linear-gradient(90deg, ${tokens.colors.accent.primary}, #3db8ff)`,
+    borderRadius: '3px',
+    transition: 'width 0.15s ease-out',
+  },
+  progressCount: {
+    fontSize: '10px',
+    color: tokens.colors.text.tertiary,
+    fontFamily: tokens.typography.fontFamily.mono,
+    whiteSpace: 'nowrap' as const,
   },
 };

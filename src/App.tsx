@@ -1,11 +1,23 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Canvas, SidePanel, Toolbar } from './components';
+import type { ImportProgress } from './components/Toolbar';
 import { Point, Chain, Contour } from './models';
 import type { Shape, Layer } from './models';
 import { CommandHistory, AddShapeCommand, RemoveShapeCommand } from './services';
 import { useKeyboardShortcuts } from './hooks/useKeyboard';
 import { ParserRegistry, Gds2Parser } from './parsers';
 import './App.css';
+
+// Batch size for progressive rendering - adjust based on performance
+const BATCH_SIZE = 50000;
+const BATCH_DELAY = 0; // ms between batches (0 = next animation frame)
+
+interface ParsedShapeData {
+  type: 'chain' | 'contour';
+  points: { x: number; y: number }[];
+  color: string;
+  layerId?: string;
+}
 
 function App() {
   const [shapes, setShapes] = useState<Shape[]>([]);
@@ -22,6 +34,15 @@ function App() {
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const parserRegistry = new ParserRegistry();
+
+  // Import progress state
+  const [importProgressState, setImportProgressState] = useState<ImportProgress>({
+    isActive: false,
+    progress: 0,
+    processed: 0,
+    total: 0
+  });
+  const importCancelledRef = useRef(false);
 
   // Update undo/redo state
   const updateHistoryState = useCallback(() => {
@@ -142,7 +163,82 @@ function App() {
     }
   }, [shapes]);
 
-  // Handle import from file
+  // Create a single Shape from parsed data
+  const createShape = useCallback((data: ParsedShapeData, index: number): Shape => {
+    const points = data.points.map(p => new Point(p.x, p.y));
+    if (data.type === 'contour') {
+      return new Contour(points, `Contour ${index + 1}`, data.color, data.layerId);
+    } else {
+      return new Chain(points, `Chain ${index + 1}`, data.color, data.layerId);
+    }
+  }, []);
+
+  // Progressive loading - add shapes in batches to avoid UI blocking
+  const loadShapesProgressively = useCallback((
+    parsedData: ParsedShapeData[],
+    newLayers: Layer[]
+  ) => {
+    const total = parsedData.length;
+    let currentIndex = 0;
+
+    // Reset state
+    importCancelledRef.current = false;
+    commandHistory.clear();
+    setShapes([]);
+    setLayers(newLayers);
+    setSelectedShapeIds([]);
+    updateHistoryState();
+
+    const processBatch = () => {
+      if (importCancelledRef.current) {
+        setImportProgressState({ isActive: false, progress: 0, processed: 0, total: 0 });
+        return;
+      }
+
+      const endIndex = Math.min(currentIndex + BATCH_SIZE, total);
+      const batchShapes: Shape[] = [];
+
+      // Create shapes for this batch
+      for (let i = currentIndex; i < endIndex; i++) {
+        batchShapes.push(createShape(parsedData[i], i));
+      }
+
+      // Add batch to state
+      setShapes(prev => [...prev, ...batchShapes]);
+
+      currentIndex = endIndex;
+      const progress = Math.round((currentIndex / total) * 100);
+
+      setImportProgressState({
+        isActive: currentIndex < total,
+        progress,
+        processed: currentIndex,
+        total
+      });
+
+      // Continue with next batch if not done
+      if (currentIndex < total) {
+        if (BATCH_DELAY > 0) {
+          setTimeout(processBatch, BATCH_DELAY);
+        } else {
+          requestAnimationFrame(processBatch);
+        }
+      }
+    };
+
+    // Start processing
+    setImportProgressState({
+      isActive: true,
+      progress: 0,
+      processed: 0,
+      total
+    });
+
+    // Use requestAnimationFrame for the first batch to let UI render
+    requestAnimationFrame(processBatch);
+  }, [commandHistory, updateHistoryState, createShape]);
+
+  // Handle import from file with progressive rendering
   const handleImport = useCallback(() => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -153,69 +249,71 @@ function App() {
       if (!file) return;
 
       try {
-        let newShapes: Shape[] = [];
-        let newLayers: Layer[] = [];
         const fileName = file.name.toLowerCase();
         const isGds = fileName.endsWith('.gds') || fileName.endsWith('.gds2');
+
+        // Parse file (fast operation)
+        let parsedData: ParsedShapeData[] = [];
+        let parsedLayers: Layer[] = [];
 
         if (isGds) {
           const buffer = await file.arrayBuffer();
           const gds2Parser = new Gds2Parser();
           const result = gds2Parser.parseWithLayers(buffer);
-          newShapes = result.shapes;
-          newLayers = result.layers;
+
+          // Convert parsed shapes to ParsedShapeData format
+          parsedData = result.shapes.map(shape => ({
+            type: shape.type as 'chain' | 'contour',
+            points: shape.points.map(p => ({ x: p.x, y: p.y })),
+            color: shape.color,
+            layerId: shape.layerId
+          }));
+
+          parsedLayers = result.layers;
         } else {
           const content = await file.text();
           const lines = content.trim().split('\n');
           const parser = parserRegistry.getParser();
 
-          // First, parse all shapes from the file
           for (const line of lines) {
             if (!line.trim()) continue;
 
-            // Parse points from coordinates
             const points = parser.parsePoints(line.trim());
+            if (points.length < 2) continue;
 
-            if (points.length < 2) {
-              console.warn('Skipping line with less than 2 points:', line);
-              continue;
-            }
-
-            // Auto-detect shape type:
-            // If first point equals last point -> contour
-            // Otherwise -> chain
-            let newShape: Shape;
             const firstPoint = points[0];
             const lastPoint = points[points.length - 1];
+            const isContour = firstPoint.equals(lastPoint);
 
-            if (firstPoint.equals(lastPoint)) {
-              // Contour - first and last points match
-              newShape = new Contour(points);
-            } else {
-              // Chain - first and last points don't match
-              newShape = new Chain(points);
-            }
-
-            newShapes.push(newShape);
+            parsedData.push({
+              type: isContour ? 'contour' : 'chain',
+              points: points.map(p => ({ x: p.x, y: p.y })),
+              color: isContour ? '#00ba7c' : '#1d9bf0'
+            });
           }
         }
 
-        // Clear existing shapes and add all imported shapes
-        if (newShapes.length > 0) {
-          // Clear command history and set new shapes directly
-          commandHistory.clear();
-          setShapes(newShapes);
-          setLayers(newLayers);
-          setSelectedShapeIds([]);
-          updateHistoryState();
+        if (parsedData.length === 0) {
+          alert('No shapes found in file');
+          return;
         }
+
+        // Start progressive loading
+        loadShapesProgressively(parsedData, parsedLayers);
+
       } catch (error) {
+        setImportProgressState({
+          isActive: false,
+          progress: 0,
+          processed: 0,
+          total: 0
+        });
         alert(`Error reading file: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     };
 
     input.click();
-  }, [commandHistory, updateHistoryState, parserRegistry]);
+  }, [parserRegistry, loadShapesProgressively]);
 
   // Handle export to file
   const handleExport = useCallback(() => {
@@ -326,6 +424,7 @@ function App() {
         onRedo={handleRedo}
         showIntersections={showIntersections}
         onToggleIntersections={() => setShowIntersections(!showIntersections)}
+        importProgress={importProgressState}
       />
 
       <div className="workspace">
