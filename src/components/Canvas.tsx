@@ -1,6 +1,7 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import type { Shape } from '../models';
 import { Point, ShapeType } from '../models';
+import { calculateIntersections } from '../services/segmentIntersections';
 import { tokens } from '../styles';
 
 // Dark theme canvas colors
@@ -22,6 +23,7 @@ const canvasColors = {
   cursor: '#f4212e',
   cursorLabel: '#f7f9f9',
   point: '#f7f9f9',
+  intersection: '#ff2d2d',
 };
 
 interface CanvasProps {
@@ -52,6 +54,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [isPanning, setIsPanning] = useState(false);
   const [lastMousePos, setLastMousePos] = useState<{ x: number; y: number } | null>(null);
   const [mouseWorldPos, setMouseWorldPos] = useState<Point | null>(null);
+  const intersections = useMemo(() => calculateIntersections(shapes), [shapes]);
 
   // Convert screen coordinates to world coordinates
   const screenToWorld = useCallback((screenX: number, screenY: number): Point => {
@@ -208,6 +211,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         drawShape(ctx, shape);
       }
     });
+
+    drawIntersections(ctx);
 
     // Draw temporary points during drawing
     if (tempPoints.length > 0) {
@@ -411,6 +416,34 @@ export const Canvas: React.FC<CanvasProps> = ({
       ctx.arc(screenPoint.x, screenPoint.y, 1.5, 0, Math.PI * 2);
       ctx.fill();
     });
+  };
+
+  const drawIntersections = (ctx: CanvasRenderingContext2D) => {
+    if (intersections.overlaps.length === 0 && intersections.points.length === 0) return;
+
+    ctx.save();
+    ctx.strokeStyle = canvasColors.intersection;
+    ctx.fillStyle = canvasColors.intersection;
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+
+    intersections.overlaps.forEach(overlap => {
+      const start = worldToScreen(overlap.start.x, overlap.start.y);
+      const end = worldToScreen(overlap.end.x, overlap.end.y);
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+    });
+
+    intersections.points.forEach(point => {
+      const screenPoint = worldToScreen(point.x, point.y);
+      ctx.beginPath();
+      ctx.arc(screenPoint.x, screenPoint.y, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    ctx.restore();
   };
 
   const drawTempShape = (ctx: CanvasRenderingContext2D, points: Point[], isContour: boolean) => {
