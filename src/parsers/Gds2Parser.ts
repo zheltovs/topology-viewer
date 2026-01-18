@@ -60,9 +60,208 @@ export interface Gds2ParseResult {
   layers: Layer[];
 }
 
+export interface Gds2LayerInfo {
+  layers: Layer[];
+  objectCounts: Map<string, number>; // layerId -> object count
+}
+
 export class Gds2Parser implements BinaryShapeParser {
   parseShapes(input: ArrayBuffer): Shape[] {
     return this.parseWithLayers(input).shapes;
+  }
+
+  /**
+   * Scans the GDS file to extract layer information and count objects per layer.
+   * This is useful for previewing available layers before full import.
+   */
+  scanLayers(input: ArrayBuffer): Gds2LayerInfo {
+    const view = new DataView(input);
+    const layerMap = new Map<number, Layer>();
+    const objectCountsByGdsLayer = new Map<number, number>();
+    let offset = 0;
+    let currentGdsLayer: number | null = null;
+    let inElement = false;
+
+    const getOrCreateLayer = (gdsLayerNum: number): Layer => {
+      if (!layerMap.has(gdsLayerNum)) {
+        const colorIndex = layerMap.size % LAYER_COLORS.length;
+        const layer = createLayer(
+          `Layer ${gdsLayerNum}`,
+          LAYER_COLORS[colorIndex],
+          gdsLayerNum
+        );
+        layerMap.set(gdsLayerNum, layer);
+        objectCountsByGdsLayer.set(gdsLayerNum, 0);
+      }
+      return layerMap.get(gdsLayerNum)!;
+    };
+
+    while (offset + RECORD_HEADER_SIZE <= view.byteLength) {
+      const recordLength = view.getUint16(offset, false);
+      if (recordLength < RECORD_HEADER_SIZE) {
+        throw new Error(
+          `Invalid GDS2 record length: ${recordLength}. Expected at least ${RECORD_HEADER_SIZE} bytes.`
+        );
+      }
+
+      const recordType = view.getUint8(offset + 2);
+      const dataType = view.getUint8(offset + 3);
+      const dataOffset = offset + RECORD_HEADER_SIZE;
+      const dataLength = recordLength - RECORD_HEADER_SIZE;
+
+      if (dataOffset + dataLength > view.byteLength) {
+        throw new Error('Unexpected end of GDS2 data.');
+      }
+
+      switch (recordType) {
+        case RecordType.Boundary:
+        case RecordType.Path:
+          inElement = true;
+          currentGdsLayer = null;
+          break;
+        case RecordType.Layer:
+          if (dataType === DataType.Int2 && dataLength >= 2) {
+            currentGdsLayer = view.getInt16(dataOffset, false);
+            getOrCreateLayer(currentGdsLayer);
+          }
+          break;
+        case RecordType.Endel:
+          if (inElement && currentGdsLayer !== null) {
+            const count = objectCountsByGdsLayer.get(currentGdsLayer) || 0;
+            objectCountsByGdsLayer.set(currentGdsLayer, count + 1);
+          }
+          inElement = false;
+          currentGdsLayer = null;
+          break;
+      }
+
+      offset += recordLength;
+    }
+
+    // Convert layer map to array, sorted by GDS layer number
+    const layers = Array.from(layerMap.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([, layer]) => layer);
+
+    // Convert object counts to use layer IDs
+    const objectCounts = new Map<string, number>();
+    for (const layer of layers) {
+      if (layer.gdsLayerNumber !== undefined) {
+        const count = objectCountsByGdsLayer.get(layer.gdsLayerNumber) || 0;
+        objectCounts.set(layer.id, count);
+      }
+    }
+
+    return { layers, objectCounts };
+  }
+
+  /**
+   * Parse GDS with filtering - only import shapes from specified layers
+   */
+  parseWithLayerFilter(input: ArrayBuffer, allowedLayerIds: Set<string>, layerMap: Map<string, Layer>): Gds2ParseResult {
+    const view = new DataView(input);
+    const shapes: Shape[] = [];
+    const usedLayers = new Map<string, Layer>();
+    let offset = 0;
+    let currentType: 'boundary' | 'path' | null = null;
+    let currentPoints: Point[] = [];
+    let currentGdsLayer: number | null = null;
+
+    const finalizeElement = () => {
+      if (!currentType) return;
+
+      const minPoints = currentType === 'boundary' ? 3 : 2;
+      if (currentPoints.length >= minPoints) {
+        const gdsLayerNum = currentGdsLayer ?? 0;
+        
+        // Find layer by GDS number
+        let layer: Layer | undefined;
+        for (const [id, l] of layerMap) {
+          if (l.gdsLayerNumber === gdsLayerNum && allowedLayerIds.has(id)) {
+            layer = l;
+            break;
+          }
+        }
+
+        // Only add shape if layer is allowed
+        if (layer) {
+          usedLayers.set(layer.id, layer);
+          const shape = currentType === 'boundary'
+            ? new Contour(currentPoints, undefined, layer.color, layer.id)
+            : new Chain(currentPoints, undefined, layer.color, layer.id);
+          shapes.push(shape);
+        }
+      }
+
+      currentType = null;
+      currentPoints = [];
+      currentGdsLayer = null;
+    };
+
+    while (offset + RECORD_HEADER_SIZE <= view.byteLength) {
+      const recordLength = view.getUint16(offset, false);
+      if (recordLength < RECORD_HEADER_SIZE) {
+        throw new Error(
+          `Invalid GDS2 record length: ${recordLength}. Expected at least ${RECORD_HEADER_SIZE} bytes.`
+        );
+      }
+
+      const recordType = view.getUint8(offset + 2);
+      const dataType = view.getUint8(offset + 3);
+      const dataOffset = offset + RECORD_HEADER_SIZE;
+      const dataLength = recordLength - RECORD_HEADER_SIZE;
+
+      if (dataOffset + dataLength > view.byteLength) {
+        throw new Error('Unexpected end of GDS2 data.');
+      }
+
+      switch (recordType) {
+        case RecordType.Boundary:
+          finalizeElement();
+          currentType = 'boundary';
+          currentPoints = [];
+          currentGdsLayer = null;
+          break;
+        case RecordType.Path:
+          finalizeElement();
+          currentType = 'path';
+          currentPoints = [];
+          currentGdsLayer = null;
+          break;
+        case RecordType.Layer:
+          if (dataType === DataType.Int2 && dataLength >= 2) {
+            currentGdsLayer = view.getInt16(dataOffset, false);
+          }
+          break;
+        case RecordType.Xy:
+          if (currentType && dataLength > 0) {
+            if (dataType !== DataType.Int4 || dataLength % COORDINATE_PAIR_SIZE !== 0) {
+              throw new Error(
+                `Unsupported XY record encoding. Expected Int4 data type and length divisible by ${COORDINATE_PAIR_SIZE}, got data type ${dataType} and length ${dataLength}.`
+              );
+            }
+            for (let i = 0; i < dataLength; i += COORDINATE_PAIR_SIZE) {
+              const x = view.getInt32(dataOffset + i, false);
+              const y = view.getInt32(dataOffset + i + 4, false);
+              currentPoints.push(new Point(x, y));
+            }
+          }
+          break;
+        case RecordType.Endel:
+          finalizeElement();
+          break;
+        default:
+          break;
+      }
+
+      offset += recordLength;
+    }
+
+    // Convert used layers to array, sorted by GDS layer number
+    const layers = Array.from(usedLayers.values())
+      .sort((a, b) => (a.gdsLayerNumber ?? 0) - (b.gdsLayerNumber ?? 0));
+
+    return { shapes, layers };
   }
 
   parseWithLayers(input: ArrayBuffer): Gds2ParseResult {
