@@ -10,13 +10,13 @@ const DEFAULT_PANEL_WIDTH = 320;
 interface SidePanelProps {
   // Common
   shapes: Shape[];
-  
+
   // Objects panel props
   onToggleVisibility: (shapeId: string) => void;
   onSelectShape: (shapeId: string) => void;
   onDeleteShape: (shapeId: string) => void;
   onChangeColor: (shapeId: string, color: string) => void;
-  
+
   // Layers panel props
   layers: Layer[];
   selectedShapeIds: string[];

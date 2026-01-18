@@ -152,17 +152,20 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
       <div style={styles.divider} />
 
-      {/* Analysis */}
+      {/* View Controls */}
       {onToggleIntersections && (
         <div style={styles.toolGroup}>
-          <button
-            className={`toolbar-btn ${showIntersections ? 'active-intersections' : ''}`}
-            onClick={onToggleIntersections}
-            title="Show/Hide Intersections"
-          >
-            <IntersectionIcon />
-            <span>Intersections</span>
-          </button>
+          <span style={styles.groupLabel}>View</span>
+          <div style={styles.buttonGroup}>
+            <button
+              className={`toolbar-btn ${showIntersections ? 'active-intersections' : ''}`}
+              onClick={onToggleIntersections}
+              title="Show/Hide Intersections"
+            >
+              <IntersectionIcon />
+              <span>Intersections</span>
+            </button>
+          </div>
         </div>
       )}
 

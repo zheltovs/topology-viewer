@@ -1,7 +1,11 @@
-import React from 'react';
+import React, { memo, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { Shape } from '../models';
 import { ShapeType } from '../models';
 import { tokens } from '../styles';
+
+// Virtualization constants
+const ITEM_HEIGHT = 88; // Height of each item in pixels (including margin)
+const OVERSCAN = 5; // Number of items to render outside viewport
 
 interface ObjectsPanelProps {
   shapes: Shape[];
@@ -57,13 +61,167 @@ const TrashIcon = () => (
   </svg>
 );
 
-export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
-  shapes,
+// Memoized shape item component to prevent unnecessary re-renders
+interface ShapeItemProps {
+  shape: Shape;
+  index: number;
+  onToggleVisibility: (shapeId: string) => void;
+  onSelectShape: (shapeId: string) => void;
+  onDeleteShape: (shapeId: string) => void;
+  onChangeColor: (shapeId: string, color: string) => void;
+}
+
+const ShapeItem = memo<ShapeItemProps>(({
+  shape,
+  index,
   onToggleVisibility,
   onSelectShape,
   onDeleteShape,
   onChangeColor
 }) => {
+  return (
+    <div
+      key={`${shape.id}-${shape.selected}`}
+      style={{
+        ...styles.item,
+        ...(shape.selected ? styles.itemSelected : {}),
+      }}
+      onClick={() => onSelectShape(shape.id)}
+    >
+      <div
+        style={{
+          ...styles.itemIcon,
+          backgroundColor: `${shape.color}20`,
+        }}
+      >
+        {shape.type === ShapeType.CHAIN
+          ? <ChainIcon color={shape.color} />
+          : <ContourIcon color={shape.color} />
+        }
+      </div>
+
+      <div style={styles.itemInfo}>
+        <div style={styles.itemName}>
+          {shape.type === ShapeType.CHAIN ? 'Chain' : 'Contour'} {index + 1}
+        </div>
+        <div style={styles.itemDetails}>
+          {shape.points.length} points
+        </div>
+
+        {/* Color picker */}
+        <div style={styles.colorPicker}>
+          {SHAPE_COLORS.map(color => (
+            <button
+              key={color}
+              style={{
+                ...styles.colorButton,
+                backgroundColor: color,
+                ...(shape.color === color ? styles.colorButtonActive : {}),
+                ...(shape.layerId ? styles.colorButtonDisabled : {}),
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!shape.layerId) {
+                  onChangeColor(shape.id, color);
+                }
+              }}
+              title={shape.layerId ? 'Remove from layer to change color' : 'Change color'}
+              disabled={!!shape.layerId}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div style={styles.itemActions}>
+        <button
+          className={`action-btn ${shape.visible ? '' : 'muted'}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleVisibility(shape.id);
+          }}
+          title={shape.visible ? 'Hide' : 'Show'}
+        >
+          {shape.visible ? <EyeIcon /> : <EyeOffIcon />}
+        </button>
+
+        <button
+          className="action-btn danger"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDeleteShape(shape.id);
+          }}
+          title="Delete"
+        >
+          <TrashIcon />
+        </button>
+      </div>
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  // Custom comparison: only re-render if these specific properties changed
+  return (
+    prevProps.shape.id === nextProps.shape.id &&
+    prevProps.shape.selected === nextProps.shape.selected &&
+    prevProps.shape.visible === nextProps.shape.visible &&
+    prevProps.shape.color === nextProps.shape.color &&
+    prevProps.shape.layerId === nextProps.shape.layerId &&
+    prevProps.shape.points.length === nextProps.shape.points.length &&
+    prevProps.index === nextProps.index
+  );
+});
+
+ShapeItem.displayName = 'ShapeItem';
+
+export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
+  shapes,
+  onToggleVisibility,
+  onSelectShape,
+  onDeleteShape,
+  onChangeColor,
+}) => {
+  // Virtualization state
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [containerHeight, setContainerHeight] = useState(0);
+
+  // Update container height on mount and resize
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const updateHeight = () => {
+      setContainerHeight(container.clientHeight);
+    };
+
+    updateHeight();
+
+    const resizeObserver = new ResizeObserver(updateHeight);
+    resizeObserver.observe(container);
+
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  // Handle scroll
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  }, []);
+
+  // Calculate visible range with overscan
+  const { startIndex, visibleShapes, offsetY } = useMemo(() => {
+    // Calculate visible range
+    const start = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN);
+    const visibleCount = Math.ceil(containerHeight / ITEM_HEIGHT) + OVERSCAN * 2;
+    const end = Math.min(shapes.length, start + visibleCount);
+
+    return {
+      startIndex: start,
+      visibleShapes: shapes.slice(start, end),
+      offsetY: start * ITEM_HEIGHT,
+    };
+  }, [shapes, scrollTop, containerHeight]);
+
+  const totalHeight = shapes.length * ITEM_HEIGHT;
+
   return (
     <div style={styles.panel}>
       {/* Header */}
@@ -72,10 +230,19 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
           <span>Objects</span>
           <span style={styles.itemCount}>{shapes.length}</span>
         </div>
+        {shapes.length > 50 && (
+          <span style={styles.virtualizedHint}>
+            Showing {visibleShapes.length} of {shapes.length}
+          </span>
+        )}
       </div>
 
-      {/* List */}
-      <div style={styles.list}>
+      {/* List with virtualization */}
+      <div
+        ref={containerRef}
+        style={styles.list}
+        onScroll={handleScroll}
+      >
         {shapes.length === 0 ? (
           <div style={styles.emptyState}>
             <div style={styles.emptyIcon}>
@@ -121,84 +288,28 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
             </div>
           </div>
         ) : (
-          shapes.map((shape, index) => (
-            <div
-              key={`${shape.id}-${shape.selected}`}
-              style={{
-                ...styles.item,
-                ...(shape.selected ? styles.itemSelected : {}),
-              }}
-              onClick={() => onSelectShape(shape.id)}
-            >
-              <div
-                style={{
-                  ...styles.itemIcon,
-                  backgroundColor: `${shape.color}20`,
-                }}
-              >
-                {shape.type === ShapeType.CHAIN
-                  ? <ChainIcon color={shape.color} />
-                  : <ContourIcon color={shape.color} />
-                }
-              </div>
-
-              <div style={styles.itemInfo}>
-                <div style={styles.itemName}>
-                  {shape.type === ShapeType.CHAIN ? 'Chain' : 'Contour'} {index + 1}
-                </div>
-                <div style={styles.itemDetails}>
-                  {shape.points.length} points
-                </div>
-
-                {/* Color picker */}
-                <div style={styles.colorPicker}>
-                  {SHAPE_COLORS.map(color => (
-                    <button
-                      key={color}
-                      style={{
-                        ...styles.colorButton,
-                        backgroundColor: color,
-                        ...(shape.color === color ? styles.colorButtonActive : {}),
-                        ...(shape.layerId ? styles.colorButtonDisabled : {}),
-                      }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!shape.layerId) {
-                          onChangeColor(shape.id, color);
-                        }
-                      }}
-                      title={shape.layerId ? 'Remove from layer to change color' : 'Change color'}
-                      disabled={!!shape.layerId}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div style={styles.itemActions}>
-                <button
-                  className={`action-btn ${shape.visible ? '' : 'muted'}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onToggleVisibility(shape.id);
-                  }}
-                  title={shape.visible ? 'Hide' : 'Show'}
-                >
-                  {shape.visible ? <EyeIcon /> : <EyeOffIcon />}
-                </button>
-
-                <button
-                  className="action-btn danger"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDeleteShape(shape.id);
-                  }}
-                  title="Delete"
-                >
-                  <TrashIcon />
-                </button>
-              </div>
+          /* Virtual list container */
+          <div style={{ height: totalHeight, position: 'relative' }}>
+            {/* Positioned container for visible items */}
+            <div style={{
+              position: 'absolute',
+              top: offsetY,
+              left: 0,
+              right: 0
+            }}>
+              {visibleShapes.map((shape, localIndex) => (
+                <ShapeItem
+                  key={shape.id}
+                  shape={shape}
+                  index={startIndex + localIndex}
+                  onToggleVisibility={onToggleVisibility}
+                  onSelectShape={onSelectShape}
+                  onDeleteShape={onDeleteShape}
+                  onChangeColor={onChangeColor}
+                />
+              ))}
             </div>
-          ))
+          </div>
         )}
       </div>
 
@@ -249,6 +360,10 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: tokens.colors.text.secondary,
     backgroundColor: tokens.colors.bg.elevated,
     borderRadius: '10px',
+  },
+  virtualizedHint: {
+    fontSize: tokens.typography.fontSize.xs,
+    color: tokens.colors.text.tertiary,
   },
   list: {
     flex: 1,
