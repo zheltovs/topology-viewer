@@ -629,3 +629,76 @@ kbd {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ========================================
+   Intersection Progress Bar
+   ======================================== */
+.intersection-progress-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.intersection-progress-bar {
+  width: 100px;
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+  background-color: rgba(0, 212, 255, 0.15);
+}
+
+.intersection-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 100%;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    #00d4ff 0%,
+    #00d4ff 40%,
+    #00f0ff 45%,
+    #b0ffff 48%,
+    #f0ffff 50%,
+    #b0ffff 52%,
+    #00f0ff 55%,
+    #00d4ff 60%,
+    #00d4ff 100%
+  );
+  background-size: 200% 100%;
+  animation: progress-shimmer 3.2s linear infinite;
+  box-shadow:
+    0 0 8px rgba(0, 212, 255, 0.6),
+    0 0 16px rgba(0, 240, 255, 0.4),
+    0 0 24px rgba(0, 212, 255, 0.2);
+}
+
+@keyframes progress-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.intersection-progress-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #00d4ff;
+  white-space: nowrap;
+  text-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
+  animation: label-pulse 2s ease-in-out infinite;
+}
+
+@keyframes label-pulse {
+  0%, 100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
+}

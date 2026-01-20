@@ -36,6 +36,7 @@ interface CanvasProps {
   tempPoints: Point[];
   showIntersections?: boolean;
   showStats?: boolean;
+  onIntersectionComputingChange?: (isComputing: boolean) => void;
 }
 
 interface ViewTransform {
@@ -50,7 +51,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   drawingMode,
   tempPoints,
   showIntersections = false,
-  showStats = false
+  showStats = false,
+  onIntersectionComputingChange
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [transform, setTransform] = useState<ViewTransform>({
@@ -762,6 +764,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     const computeIntersections = async () => {
       if (showIntersections) {
+        onIntersectionComputingChange?.(true);
         try {
           const intersections = await IntersectionDetector.findAllIntersectionsSimple(shapes);
           if (!isCancelled) {
@@ -772,9 +775,14 @@ export const Canvas: React.FC<CanvasProps> = ({
           if (!isCancelled) {
             setIntersections([]);
           }
+        } finally {
+          if (!isCancelled) {
+            onIntersectionComputingChange?.(false);
+          }
         }
       } else {
         setIntersections([]);
+        onIntersectionComputingChange?.(false);
       }
     };
 
@@ -783,7 +791,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [shapes, showIntersections]);
+  }, [shapes, showIntersections, onIntersectionComputingChange]);
 
   // Drawing function
   useEffect(() => {

@@ -22,6 +22,7 @@ function App() {
   const [drawingMode, setDrawingMode] = useState<'chain' | 'contour' | null>(null);
   const [tempPoints, setTempPoints] = useState<Point[]>([]);
   const [showIntersections, setShowIntersections] = useState(false);
+  const [isComputingIntersections, setIsComputingIntersections] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const [commandHistory] = useState(() => {
     const history = new CommandHistory();
@@ -388,6 +389,7 @@ function App() {
         onRedo={handleRedo}
         showIntersections={showIntersections}
         onToggleIntersections={() => setShowIntersections(!showIntersections)}
+        isComputingIntersections={isComputingIntersections}
       />
 
       <div className="workspace">
@@ -399,6 +401,7 @@ function App() {
             tempPoints={tempPoints}
             showIntersections={showIntersections}
             showStats={showStats}
+            onIntersectionComputingChange={setIsComputingIntersections}
           />
         </div>
 

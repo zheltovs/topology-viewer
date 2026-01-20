@@ -12,6 +12,7 @@ interface ToolbarProps {
   onRedo: () => void;
   showIntersections?: boolean;
   onToggleIntersections?: () => void;
+  isComputingIntersections?: boolean;
 }
 
 // Icon components for clean, modern look
@@ -82,7 +83,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onUndo,
   onRedo,
   showIntersections = false,
-  onToggleIntersections
+  onToggleIntersections,
+  isComputingIntersections = false
 }) => {
   return (
     <div style={styles.toolbar}>
@@ -193,6 +195,16 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Intersection Computing Progress */}
+      {isComputingIntersections && (
+        <div className="intersection-progress-container">
+          <div className="intersection-progress-bar">
+            <div className="intersection-progress-fill" />
+          </div>
+          <span className="intersection-progress-label">Working...</span>
+        </div>
+      )}
 
       {/* Status / Hints */}
       <div style={styles.statusArea}>
