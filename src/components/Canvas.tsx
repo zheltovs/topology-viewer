@@ -132,6 +132,518 @@ export const Canvas: React.FC<CanvasProps> = ({
     return { x, y };
   }, [transform]);
 
+  // Helper to create fill color from stroke color
+  const colorToFill = useCallback((color: string, alpha: number = 0.15): string => {
+    // Handle hex colors
+    if (color.startsWith('#')) {
+      const hex = color.slice(1);
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+    return color;
+  }, []);
+
+  // Draw coordinate axes and grid
+  const drawGrid = useCallback((ctx: CanvasRenderingContext2D, width: number, height: number) => {
+    // Calculate grid spacing based on scale - use fixed world units
+    // Choose nice round numbers: 1, 2, 5, 10, 20, 50, 100, etc.
+    const targetPixelSpacing = 100; // target pixel spacing between grid lines
+    const rawWorldSpacing = targetPixelSpacing / transform.scale;
+
+    // Round to nice numbers (1, 2, 5, 10, 20, 50, etc.)
+    const magnitude = Math.pow(10, Math.floor(Math.log10(rawWorldSpacing)));
+    const normalized = rawWorldSpacing / magnitude;
+    let niceNumber: number;
+    if (normalized < 1.5) niceNumber = 1;
+    else if (normalized < 3.5) niceNumber = 2;
+    else if (normalized < 7.5) niceNumber = 5;
+    else niceNumber = 10;
+
+    const worldSpacing = niceNumber * magnitude;
+
+    // Calculate world origin in screen coordinates
+    const originScreen = worldToScreen(0, 0);
+
+    // Draw minor grid lines - aligned to world coordinates
+    ctx.strokeStyle = canvasColors.grid;
+    ctx.lineWidth = 1;
+
+    // Calculate grid line positions based on world coordinates
+    const worldLeft = -transform.offsetX / transform.scale - width / 2 / transform.scale;
+    const worldRight = worldLeft + width / transform.scale;
+    const worldTop = transform.offsetY / transform.scale + height / 2 / transform.scale;
+    const worldBottom = worldTop - height / transform.scale;
+
+    // Vertical lines (X grid)
+    const startWorldX = Math.floor(worldLeft / worldSpacing) * worldSpacing;
+    for (let wx = startWorldX; wx <= worldRight; wx += worldSpacing) {
+      const screenX = originScreen.x + wx * transform.scale;
+      ctx.beginPath();
+      ctx.moveTo(screenX, 0);
+      ctx.lineTo(screenX, height);
+      ctx.stroke();
+    }
+
+    // Horizontal lines (Y grid)
+    const startWorldY = Math.floor(worldBottom / worldSpacing) * worldSpacing;
+    for (let wy = startWorldY; wy <= worldTop; wy += worldSpacing) {
+      const screenY = originScreen.y - wy * transform.scale;
+      ctx.beginPath();
+      ctx.moveTo(0, screenY);
+      ctx.lineTo(width, screenY);
+      ctx.stroke();
+    }
+
+    // Draw axes
+    ctx.strokeStyle = canvasColors.axis;
+    ctx.lineWidth = 1.5;
+
+    // X-axis (only if visible)
+    if (originScreen.y >= 0 && originScreen.y <= height) {
+      ctx.beginPath();
+      ctx.moveTo(0, originScreen.y);
+      ctx.lineTo(width, originScreen.y);
+      ctx.stroke();
+    }
+
+    // Y-axis (only if visible)
+    if (originScreen.x >= 0 && originScreen.x <= width) {
+      ctx.beginPath();
+      ctx.moveTo(originScreen.x, 0);
+      ctx.lineTo(originScreen.x, height);
+      ctx.stroke();
+    }
+
+    // Draw axis labels - at grid intersections
+    ctx.font = `500 12px ${tokens.typography.fontFamily.mono}`;
+    ctx.fillStyle = canvasColors.axisLabel;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+
+    // Determine decimal places based on world spacing
+    const decimals = worldSpacing < 1 ? Math.ceil(-Math.log10(worldSpacing)) : 0;
+
+    // X-axis labels
+    for (let wx = startWorldX; wx <= worldRight; wx += worldSpacing) {
+      if (Math.abs(wx) < worldSpacing * 0.01) continue; // Skip origin
+      const screenX = originScreen.x + wx * transform.scale;
+      if (screenX < 10 || screenX > width - 40) continue; // Avoid edge clipping
+
+      const label = wx.toFixed(decimals);
+      const labelY = Math.min(Math.max(originScreen.y + 6, 6), height - 16);
+      ctx.fillText(label, screenX + 4, labelY);
+    }
+
+    // Y-axis labels
+    ctx.textAlign = 'left';
+    for (let wy = startWorldY; wy <= worldTop; wy += worldSpacing) {
+      if (Math.abs(wy) < worldSpacing * 0.01) continue; // Skip origin
+      const screenY = originScreen.y - wy * transform.scale;
+      if (screenY < 16 || screenY > height - 10) continue; // Avoid edge clipping
+
+      const label = wy.toFixed(decimals);
+      const labelX = Math.min(Math.max(originScreen.x + 6, 6), width - 50);
+      ctx.fillText(label, labelX, screenY - 6);
+    }
+
+    // Draw origin point (if visible)
+    if (originScreen.x >= -10 && originScreen.x <= width + 10 &&
+        originScreen.y >= -10 && originScreen.y <= height + 10) {
+      ctx.fillStyle = canvasColors.origin;
+      ctx.beginPath();
+      ctx.arc(originScreen.x, originScreen.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Origin label
+      ctx.fillText('0', originScreen.x + 6, originScreen.y + 6);
+    }
+  }, [transform, worldToScreen, tokens.typography.fontFamily.mono, canvasColors]);
+
+  // Batched rendering for non-selected shapes - reduces draw calls significantly
+  const drawShapesBatched = useCallback((ctx: CanvasRenderingContext2D, shapesByColor: Map<string, Shape[]>) => {
+    // LOD: Simplify geometry when zoomed out - progressive scaling
+    // At scale=1: 4px, at scale=0.1: 8px, at scale=0.01: 12px
+    const basePixelDistance = 4;
+    const distanceScaleFactor = Math.max(1, 1 + Math.log10(1 / Math.max(transform.scale, 0.001)));
+    const minPixelDistance = basePixelDistance * distanceScaleFactor;
+    const minWorldDistance = minPixelDistance / transform.scale;
+
+    // Whether to draw individual points - progressive threshold
+    // Points become noise earlier at low zoom levels
+    const shouldDrawPoints = transform.scale > 1.0;
+    // Progressive point skipping: more aggressive as zoom decreases
+    const pointSkip = transform.scale < 2.0 ? Math.ceil(4 / Math.max(transform.scale, 0.01)) : 1;
+
+    for (const [colorKey, shapes] of shapesByColor) {
+      if (shapes.length === 0) continue;
+
+      // Parse color and type from key
+      const lastUnderscoreIndex = colorKey.lastIndexOf('_');
+      const color = colorKey.substring(0, lastUnderscoreIndex);
+      const type = colorKey.substring(lastUnderscoreIndex + 1);
+      const isContour = type === ShapeType.CONTOUR;
+
+      // Set up context for this batch
+      ctx.strokeStyle = color;
+      ctx.fillStyle = isContour ? colorToFill(color, 0.12) : 'transparent';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      // Draw all strokes in one batch
+      ctx.beginPath();
+      for (const shape of shapes) {
+        if (shape.points.length < 2) continue;
+
+        const firstPoint = worldToScreen(shape.points[0].x, shape.points[0].y);
+        ctx.moveTo(firstPoint.x, firstPoint.y);
+
+        let lastRenderedPoint = shape.points[0];
+        for (let i = 1; i < shape.points.length; i++) {
+          const currentPoint = shape.points[i];
+
+          // LOD: Skip intermediate points that are too close
+          if (i < shape.points.length - 1) {
+            const dx = currentPoint.x - lastRenderedPoint.x;
+            const dy = currentPoint.y - lastRenderedPoint.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance < minWorldDistance) {
+              continue;
+            }
+          }
+
+          const point = worldToScreen(currentPoint.x, currentPoint.y);
+          ctx.lineTo(point.x, point.y);
+          lastRenderedPoint = currentPoint;
+        }
+
+        if (isContour) {
+          ctx.closePath();
+        }
+      }
+
+      // Fill all contours at once
+      if (isContour) {
+        ctx.fill();
+      }
+      ctx.stroke();
+
+      // Draw points for this batch (only if zoomed in enough)
+      if (shouldDrawPoints) {
+        ctx.fillStyle = color;
+
+        for (const shape of shapes) {
+          shape.points.forEach((point, index) => {
+            // Skip some points when zoomed out
+            if (pointSkip > 1 && index % pointSkip !== 0 &&
+                index !== 0 && index !== shape.points.length - 1) {
+              return;
+            }
+
+            const screenPoint = worldToScreen(point.x, point.y);
+            ctx.beginPath();
+            ctx.arc(screenPoint.x, screenPoint.y, 4, 0, Math.PI * 2);
+            ctx.fill();
+          });
+        }
+
+        // Draw inner highlights (only at high zoom levels)
+        if (transform.scale > 2.0) {
+          ctx.fillStyle = canvasColors.point;
+          for (const shape of shapes) {
+            shape.points.forEach((point, index) => {
+              if (pointSkip > 1 && index % pointSkip !== 0 &&
+                  index !== 0 && index !== shape.points.length - 1) {
+                return;
+              }
+
+              const screenPoint = worldToScreen(point.x, point.y);
+              ctx.beginPath();
+              ctx.arc(screenPoint.x, screenPoint.y, 1.5, 0, Math.PI * 2);
+              ctx.fill();
+            });
+          }
+        }
+      }
+    }
+  }, [transform, worldToScreen, colorToFill, ShapeType, canvasColors]);
+
+  const drawShape = useCallback((ctx: CanvasRenderingContext2D, shape: Shape) => {
+    if (shape.points.length < 2) return;
+
+    const isContour = shape.type === ShapeType.CONTOUR;
+    const isSelected = shape.selected;
+    const shapeColor = shape.color;
+
+    // Set colors based on shape color and selection state
+    if (isSelected) {
+      ctx.strokeStyle = canvasColors.selected;
+      ctx.fillStyle = canvasColors.selectedFill;
+    } else {
+      ctx.strokeStyle = shapeColor;
+      ctx.fillStyle = isContour ? colorToFill(shapeColor, 0.12) : 'transparent';
+    }
+
+    ctx.lineWidth = isSelected ? 2.5 : 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // LOD: Simplify geometry when zoomed out - progressive scaling
+    // At scale=1: 4px, at scale=0.1: 8px, at scale=0.01: 12px
+    const basePixelDistance = 4;
+    const distanceScaleFactor = Math.max(1, 1 + Math.log10(1 / Math.max(transform.scale, 0.001)));
+    const minPixelDistance = basePixelDistance * distanceScaleFactor;
+    const minWorldDistance = minPixelDistance / transform.scale;
+
+    ctx.beginPath();
+    const firstPoint = worldToScreen(shape.points[0].x, shape.points[0].y);
+    ctx.moveTo(firstPoint.x, firstPoint.y);
+
+    let lastRenderedPoint = shape.points[0];
+    for (let i = 1; i < shape.points.length; i++) {
+      const currentPoint = shape.points[i];
+
+      // LOD: Skip intermediate points that are too close (except for the last point)
+      if (i < shape.points.length - 1) {
+        const dx = currentPoint.x - lastRenderedPoint.x;
+        const dy = currentPoint.y - lastRenderedPoint.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance < minWorldDistance) {
+          continue; // Skip this point
+        }
+      }
+
+      const point = worldToScreen(currentPoint.x, currentPoint.y);
+      ctx.lineTo(point.x, point.y);
+      lastRenderedPoint = currentPoint;
+    }
+
+    if (isContour) {
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.stroke();
+
+    // LOD: Only draw individual points when zoomed in enough
+    // Points shown only for selected shapes at low zoom, or when zoomed in
+    const shouldDrawPoints = transform.scale > 1.0 || isSelected;
+
+    if (shouldDrawPoints) {
+      // LOD: Progressive point skipping - more aggressive as zoom decreases
+      const pointSkip = isSelected ? 1 : (transform.scale < 2.0 ? Math.ceil(4 / Math.max(transform.scale, 0.01)) : 1);
+
+      shape.points.forEach((point, index) => {
+        // Skip some points when zoomed out (but always draw first, last, and selected)
+        if (!isSelected && pointSkip > 1 && index % pointSkip !== 0 &&
+            index !== 0 && index !== shape.points.length - 1) {
+          return;
+        }
+
+        const screenPoint = worldToScreen(point.x, point.y);
+
+        if (isSelected) {
+          // Outer glow
+          ctx.fillStyle = canvasColors.selectedFill;
+          ctx.beginPath();
+          ctx.arc(screenPoint.x, screenPoint.y, 8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Main point
+        ctx.fillStyle = isSelected ? canvasColors.selected : shapeColor;
+        ctx.beginPath();
+        ctx.arc(screenPoint.x, screenPoint.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Inner highlight - only at high zoom levels
+        if (transform.scale > 2.0 || isSelected) {
+          ctx.fillStyle = canvasColors.point;
+          ctx.beginPath();
+          ctx.arc(screenPoint.x, screenPoint.y, 1.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+    }
+  }, [transform, worldToScreen, colorToFill, ShapeType, canvasColors]);
+
+  const drawTempShape = useCallback((ctx: CanvasRenderingContext2D, points: Point[], isContour: boolean) => {
+    if (points.length === 0) return;
+
+    ctx.strokeStyle = canvasColors.drawing;
+    ctx.fillStyle = canvasColors.drawingFill;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.setLineDash([6, 4]);
+
+    ctx.beginPath();
+    const firstPoint = worldToScreen(points[0].x, points[0].y);
+    ctx.moveTo(firstPoint.x, firstPoint.y);
+
+    for (let i = 1; i < points.length; i++) {
+      const point = worldToScreen(points[i].x, points[i].y);
+      ctx.lineTo(point.x, point.y);
+    }
+
+    // If mouse is over canvas and we have temp points, draw line to cursor
+    if (mouseWorldPos && points.length > 0) {
+      const cursorScreen = worldToScreen(mouseWorldPos.x, mouseWorldPos.y);
+      ctx.lineTo(cursorScreen.x, cursorScreen.y);
+
+      // If drawing contour, show closing line
+      if (isContour && points.length >= 2) {
+        ctx.lineTo(firstPoint.x, firstPoint.y);
+      }
+    }
+
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Draw points with glow
+    points.forEach(point => {
+      const screenPoint = worldToScreen(point.x, point.y);
+
+      // Outer glow
+      ctx.fillStyle = canvasColors.drawingFill;
+      ctx.beginPath();
+      ctx.arc(screenPoint.x, screenPoint.y, 10, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Main point
+      ctx.fillStyle = canvasColors.drawing;
+      ctx.beginPath();
+      ctx.arc(screenPoint.x, screenPoint.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Inner highlight
+      ctx.fillStyle = canvasColors.point;
+      ctx.beginPath();
+      ctx.arc(screenPoint.x, screenPoint.y, 2, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }, [worldToScreen, mouseWorldPos, canvasColors]);
+
+  const drawIntersections = useCallback((ctx: CanvasRenderingContext2D) => {
+    intersections.forEach((intersection: IntersectionResult) => {
+      if (intersection.type === IntersectionType.POINT && intersection.point) {
+        const screenPos = worldToScreen(intersection.point.x, intersection.point.y);
+
+        // Outer glow
+        ctx.fillStyle = canvasColors.intersectionFill;
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, 12, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Main point - bright red
+        ctx.fillStyle = canvasColors.intersection;
+        ctx.shadowColor = canvasColors.intersection;
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Inner highlight
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (intersection.type === IntersectionType.OVERLAP && intersection.segment) {
+        const p1Screen = worldToScreen(intersection.segment.p1.x, intersection.segment.p1.y);
+        const p2Screen = worldToScreen(intersection.segment.p2.x, intersection.segment.p2.y);
+
+        // Glow for overlapping segment
+        ctx.strokeStyle = canvasColors.intersectionGlow;
+        ctx.lineWidth = 8;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(p1Screen.x, p1Screen.y);
+        ctx.lineTo(p2Screen.x, p2Screen.y);
+        ctx.stroke();
+
+        // Main overlapping segment - bright red
+        ctx.strokeStyle = canvasColors.intersection;
+        ctx.lineWidth = 4;
+        ctx.shadowColor = canvasColors.intersection;
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.moveTo(p1Screen.x, p1Screen.y);
+        ctx.lineTo(p2Screen.x, p2Screen.y);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+      }
+    });
+  }, [worldToScreen, intersections, IntersectionType, canvasColors]);
+
+  const drawCursor = useCallback((ctx: CanvasRenderingContext2D, worldPos: Point) => {
+    const screenPos = worldToScreen(worldPos.x, worldPos.y);
+
+    // Draw crosshair with subtle glow
+    ctx.strokeStyle = canvasColors.cursor;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.shadowColor = canvasColors.cursor;
+    ctx.shadowBlur = 4;
+
+    ctx.beginPath();
+    ctx.moveTo(screenPos.x - 12, screenPos.y);
+    ctx.lineTo(screenPos.x + 12, screenPos.y);
+    ctx.moveTo(screenPos.x, screenPos.y - 12);
+    ctx.lineTo(screenPos.x, screenPos.y + 12);
+    ctx.stroke();
+
+    ctx.setLineDash([]);
+    ctx.shadowBlur = 0;
+
+    // Draw coordinates with background for readability
+    const coordText = `(${worldPos.x.toFixed(2)}, ${worldPos.y.toFixed(2)})`;
+    ctx.font = '11px "SF Mono", "Fira Code", Consolas, monospace';
+    const textWidth = ctx.measureText(coordText).width;
+
+    // Background pill
+    const padding = 6;
+    const bgX = screenPos.x + 14;
+    const bgY = screenPos.y - 22;
+
+    ctx.fillStyle = 'rgba(10, 14, 19, 0.85)';
+    ctx.beginPath();
+    ctx.roundRect(bgX - padding, bgY - 10, textWidth + padding * 2, 18, 4);
+    ctx.fill();
+
+    // Border
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Text
+    ctx.fillStyle = canvasColors.cursorLabel;
+    ctx.fillText(coordText, bgX, bgY + 4);
+  }, [worldToScreen, canvasColors]);
+
+  // Draw performance statistics overlay
+  const drawStats = useCallback((ctx: CanvasRenderingContext2D, visibleCount: number, totalCount: number, scale: number) => {
+    if (totalCount === 0) return; // Don't show stats when no shapes
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const statsText = `Rendering: ${visibleCount} / ${totalCount} shapes | Zoom: ${scale.toFixed(3)}x`;
+    ctx.font = '11px "SF Mono", "Fira Code", Consolas, monospace';
+
+    // Position in bottom-left corner
+    const x = 10;
+    const y = canvas.height - 15;
+
+    // Text with dark blue color
+    ctx.fillStyle = '#3ff832ff';
+    ctx.fillText(statsText, x, y);
+  }, [canvasRef]);
+
   // Handle mouse wheel for zooming
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
@@ -246,12 +758,31 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   // Compute intersections when shapes or visibility changes
   useEffect(() => {
-    if (showIntersections) {
-      const intersections = IntersectionDetector.findAllIntersectionsSimple(shapes);
-      setIntersections(intersections);
-    } else {
-      setIntersections([]);
-    }
+    let isCancelled = false;
+
+    const computeIntersections = async () => {
+      if (showIntersections) {
+        try {
+          const intersections = await IntersectionDetector.findAllIntersectionsSimple(shapes);
+          if (!isCancelled) {
+            setIntersections(intersections);
+          }
+        } catch (error) {
+          console.error('Error computing intersections:', error);
+          if (!isCancelled) {
+            setIntersections([]);
+          }
+        }
+      } else {
+        setIntersections([]);
+      }
+    };
+
+    computeIntersections();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [shapes, showIntersections]);
 
   // Drawing function
@@ -331,518 +862,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     // Restore context
     ctx.restore();
-  }, [shapes, transform, tempPoints, drawingMode, mouseWorldPos, worldToScreen, showIntersections, intersections, getVisibleShapes, showStats]);
-
-  const drawGrid = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
-    // Calculate grid spacing based on scale - use fixed world units
-    // Choose nice round numbers: 1, 2, 5, 10, 20, 50, 100, etc.
-    const targetPixelSpacing = 100; // target pixel spacing between grid lines
-    const rawWorldSpacing = targetPixelSpacing / transform.scale;
-
-    // Round to nice numbers (1, 2, 5, 10, 20, 50, etc.)
-    const magnitude = Math.pow(10, Math.floor(Math.log10(rawWorldSpacing)));
-    const normalized = rawWorldSpacing / magnitude;
-    let niceNumber: number;
-    if (normalized < 1.5) niceNumber = 1;
-    else if (normalized < 3.5) niceNumber = 2;
-    else if (normalized < 7.5) niceNumber = 5;
-    else niceNumber = 10;
-
-    const worldSpacing = niceNumber * magnitude;
-
-    // Calculate world origin in screen coordinates
-    const originScreen = worldToScreen(0, 0);
-
-    // Draw minor grid lines - aligned to world coordinates
-    ctx.strokeStyle = canvasColors.grid;
-    ctx.lineWidth = 1;
-
-    // Calculate grid line positions based on world coordinates
-    const worldLeft = -transform.offsetX / transform.scale - width / 2 / transform.scale;
-    const worldRight = worldLeft + width / transform.scale;
-    const worldTop = transform.offsetY / transform.scale + height / 2 / transform.scale;
-    const worldBottom = worldTop - height / transform.scale;
-
-    // Vertical lines (X grid)
-    const startWorldX = Math.floor(worldLeft / worldSpacing) * worldSpacing;
-    for (let wx = startWorldX; wx <= worldRight; wx += worldSpacing) {
-      const screenX = originScreen.x + wx * transform.scale;
-      ctx.beginPath();
-      ctx.moveTo(screenX, 0);
-      ctx.lineTo(screenX, height);
-      ctx.stroke();
-    }
-
-    // Horizontal lines (Y grid)
-    const startWorldY = Math.floor(worldBottom / worldSpacing) * worldSpacing;
-    for (let wy = startWorldY; wy <= worldTop; wy += worldSpacing) {
-      const screenY = originScreen.y - wy * transform.scale;
-      ctx.beginPath();
-      ctx.moveTo(0, screenY);
-      ctx.lineTo(width, screenY);
-      ctx.stroke();
-    }
-
-    // Draw axes
-    ctx.strokeStyle = canvasColors.axis;
-    ctx.lineWidth = 1.5;
-
-    // X-axis (only if visible)
-    if (originScreen.y >= 0 && originScreen.y <= height) {
-      ctx.beginPath();
-      ctx.moveTo(0, originScreen.y);
-      ctx.lineTo(width, originScreen.y);
-      ctx.stroke();
-    }
-
-    // Y-axis (only if visible)
-    if (originScreen.x >= 0 && originScreen.x <= width) {
-      ctx.beginPath();
-      ctx.moveTo(originScreen.x, 0);
-      ctx.lineTo(originScreen.x, height);
-      ctx.stroke();
-    }
-
-    // Draw axis labels - at grid intersections
-    ctx.font = `500 12px ${tokens.typography.fontFamily.mono}`;
-    ctx.fillStyle = canvasColors.axisLabel;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-
-    // Determine decimal places based on world spacing
-    const decimals = worldSpacing < 1 ? Math.ceil(-Math.log10(worldSpacing)) : 0;
-
-    // X-axis labels
-    for (let wx = startWorldX; wx <= worldRight; wx += worldSpacing) {
-      if (Math.abs(wx) < worldSpacing * 0.01) continue; // Skip origin
-      const screenX = originScreen.x + wx * transform.scale;
-      if (screenX < 10 || screenX > width - 40) continue; // Avoid edge clipping
-
-      const label = wx.toFixed(decimals);
-      const labelY = Math.min(Math.max(originScreen.y + 6, 6), height - 16);
-      ctx.fillText(label, screenX + 4, labelY);
-    }
-
-    // Y-axis labels
-    ctx.textAlign = 'left';
-    for (let wy = startWorldY; wy <= worldTop; wy += worldSpacing) {
-      if (Math.abs(wy) < worldSpacing * 0.01) continue; // Skip origin
-      const screenY = originScreen.y - wy * transform.scale;
-      if (screenY < 16 || screenY > height - 10) continue; // Avoid edge clipping
-
-      const label = wy.toFixed(decimals);
-      const labelX = Math.min(Math.max(originScreen.x + 6, 6), width - 50);
-      ctx.fillText(label, labelX, screenY - 6);
-    }
-
-    // Draw origin point (if visible)
-    if (originScreen.x >= -10 && originScreen.x <= width + 10 &&
-        originScreen.y >= -10 && originScreen.y <= height + 10) {
-      ctx.fillStyle = canvasColors.origin;
-      ctx.beginPath();
-      ctx.arc(originScreen.x, originScreen.y, 4, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Origin label
-      ctx.fillText('0', originScreen.x + 6, originScreen.y + 6);
-    }
-  };
-
-  // Helper to create fill color from stroke color
-  const colorToFill = (color: string, alpha: number = 0.15): string => {
-    // Handle hex colors
-    if (color.startsWith('#')) {
-      const hex = color.slice(1);
-      const r = parseInt(hex.slice(0, 2), 16);
-      const g = parseInt(hex.slice(2, 4), 16);
-      const b = parseInt(hex.slice(4, 6), 16);
-      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-    }
-    return color;
-  };
-
-  // Batched rendering for non-selected shapes - reduces draw calls significantly
-  const drawShapesBatched = (ctx: CanvasRenderingContext2D, shapesByColor: Map<string, Shape[]>) => {
-    // LOD: Simplify geometry when zoomed out - progressive scaling
-    // At scale=1: 4px, at scale=0.1: 8px, at scale=0.01: 12px
-    const basePixelDistance = 4;
-    const distanceScaleFactor = Math.max(1, 1 + Math.log10(1 / Math.max(transform.scale, 0.001)));
-    const minPixelDistance = basePixelDistance * distanceScaleFactor;
-    const minWorldDistance = minPixelDistance / transform.scale;
-
-    // Whether to draw individual points - progressive threshold
-    // Points become noise earlier at low zoom levels
-    const shouldDrawPoints = transform.scale > 1.0;
-    // Progressive point skipping: more aggressive as zoom decreases
-    const pointSkip = transform.scale < 2.0 ? Math.ceil(4 / Math.max(transform.scale, 0.01)) : 1;
-
-    for (const [colorKey, shapes] of shapesByColor) {
-      if (shapes.length === 0) continue;
-
-      // Parse color and type from key
-      const lastUnderscoreIndex = colorKey.lastIndexOf('_');
-      const color = colorKey.substring(0, lastUnderscoreIndex);
-      const type = colorKey.substring(lastUnderscoreIndex + 1);
-      const isContour = type === ShapeType.CONTOUR;
-
-      // Set up context for this batch
-      ctx.strokeStyle = color;
-      ctx.fillStyle = isContour ? colorToFill(color, 0.12) : 'transparent';
-      ctx.lineWidth = 2;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
-      // Draw all strokes in one batch
-      ctx.beginPath();
-      for (const shape of shapes) {
-        if (shape.points.length < 2) continue;
-
-        const firstPoint = worldToScreen(shape.points[0].x, shape.points[0].y);
-        ctx.moveTo(firstPoint.x, firstPoint.y);
-
-        let lastRenderedPoint = shape.points[0];
-        for (let i = 1; i < shape.points.length; i++) {
-          const currentPoint = shape.points[i];
-
-          // LOD: Skip intermediate points that are too close
-          if (i < shape.points.length - 1) {
-            const dx = currentPoint.x - lastRenderedPoint.x;
-            const dy = currentPoint.y - lastRenderedPoint.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-
-            if (distance < minWorldDistance) {
-              continue;
-            }
-          }
-
-          const point = worldToScreen(currentPoint.x, currentPoint.y);
-          ctx.lineTo(point.x, point.y);
-          lastRenderedPoint = currentPoint;
-        }
-
-        if (isContour) {
-          ctx.closePath();
-        }
-      }
-
-      // Fill all contours at once
-      if (isContour) {
-        ctx.fill();
-      }
-      ctx.stroke();
-
-      // Draw points for this batch (only if zoomed in enough)
-      if (shouldDrawPoints) {
-        ctx.fillStyle = color;
-
-        for (const shape of shapes) {
-          shape.points.forEach((point, index) => {
-            // Skip some points when zoomed out
-            if (pointSkip > 1 && index % pointSkip !== 0 &&
-                index !== 0 && index !== shape.points.length - 1) {
-              return;
-            }
-
-            const screenPoint = worldToScreen(point.x, point.y);
-            ctx.beginPath();
-            ctx.arc(screenPoint.x, screenPoint.y, 4, 0, Math.PI * 2);
-            ctx.fill();
-          });
-        }
-
-        // Draw inner highlights (only at high zoom levels)
-        if (transform.scale > 2.0) {
-          ctx.fillStyle = canvasColors.point;
-          for (const shape of shapes) {
-            shape.points.forEach((point, index) => {
-              if (pointSkip > 1 && index % pointSkip !== 0 &&
-                  index !== 0 && index !== shape.points.length - 1) {
-                return;
-              }
-
-              const screenPoint = worldToScreen(point.x, point.y);
-              ctx.beginPath();
-              ctx.arc(screenPoint.x, screenPoint.y, 1.5, 0, Math.PI * 2);
-              ctx.fill();
-            });
-          }
-        }
-      }
-    }
-  };
-
-  const drawShape = (ctx: CanvasRenderingContext2D, shape: Shape) => {
-    if (shape.points.length < 2) return;
-
-    const isContour = shape.type === ShapeType.CONTOUR;
-    const isSelected = shape.selected;
-    const shapeColor = shape.color;
-
-    // Set colors based on shape color and selection state
-    if (isSelected) {
-      ctx.strokeStyle = canvasColors.selected;
-      ctx.fillStyle = canvasColors.selectedFill;
-    } else {
-      ctx.strokeStyle = shapeColor;
-      ctx.fillStyle = isContour ? colorToFill(shapeColor, 0.12) : 'transparent';
-    }
-
-    ctx.lineWidth = isSelected ? 2.5 : 2;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    // LOD: Simplify geometry when zoomed out - progressive scaling
-    // At scale=1: 4px, at scale=0.1: 8px, at scale=0.01: 12px
-    const basePixelDistance = 4;
-    const distanceScaleFactor = Math.max(1, 1 + Math.log10(1 / Math.max(transform.scale, 0.001)));
-    const minPixelDistance = basePixelDistance * distanceScaleFactor;
-    const minWorldDistance = minPixelDistance / transform.scale;
-
-    ctx.beginPath();
-    const firstPoint = worldToScreen(shape.points[0].x, shape.points[0].y);
-    ctx.moveTo(firstPoint.x, firstPoint.y);
-
-    let lastRenderedPoint = shape.points[0];
-    for (let i = 1; i < shape.points.length; i++) {
-      const currentPoint = shape.points[i];
-
-      // LOD: Skip intermediate points that are too close (except for the last point)
-      if (i < shape.points.length - 1) {
-        const dx = currentPoint.x - lastRenderedPoint.x;
-        const dy = currentPoint.y - lastRenderedPoint.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-
-        if (distance < minWorldDistance) {
-          continue; // Skip this point
-        }
-      }
-
-      const point = worldToScreen(currentPoint.x, currentPoint.y);
-      ctx.lineTo(point.x, point.y);
-      lastRenderedPoint = currentPoint;
-    }
-
-    if (isContour) {
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    ctx.stroke();
-
-    // LOD: Only draw individual points when zoomed in enough
-    // Points shown only for selected shapes at low zoom, or when zoomed in
-    const shouldDrawPoints = transform.scale > 1.0 || isSelected;
-
-    if (shouldDrawPoints) {
-      // LOD: Progressive point skipping - more aggressive as zoom decreases
-      const pointSkip = isSelected ? 1 : (transform.scale < 2.0 ? Math.ceil(4 / Math.max(transform.scale, 0.01)) : 1);
-
-      shape.points.forEach((point, index) => {
-        // Skip some points when zoomed out (but always draw first, last, and selected)
-        if (!isSelected && pointSkip > 1 && index % pointSkip !== 0 &&
-            index !== 0 && index !== shape.points.length - 1) {
-          return;
-        }
-
-        const screenPoint = worldToScreen(point.x, point.y);
-
-        if (isSelected) {
-          // Outer glow
-          ctx.fillStyle = canvasColors.selectedFill;
-          ctx.beginPath();
-          ctx.arc(screenPoint.x, screenPoint.y, 8, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        // Main point
-        ctx.fillStyle = isSelected ? canvasColors.selected : shapeColor;
-        ctx.beginPath();
-        ctx.arc(screenPoint.x, screenPoint.y, 4, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Inner highlight - only at high zoom levels
-        if (transform.scale > 2.0 || isSelected) {
-          ctx.fillStyle = canvasColors.point;
-          ctx.beginPath();
-          ctx.arc(screenPoint.x, screenPoint.y, 1.5, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      });
-    }
-  };
-
-  const drawTempShape = (ctx: CanvasRenderingContext2D, points: Point[], isContour: boolean) => {
-    if (points.length === 0) return;
-
-    ctx.strokeStyle = canvasColors.drawing;
-    ctx.fillStyle = canvasColors.drawingFill;
-    ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.setLineDash([6, 4]);
-
-    ctx.beginPath();
-    const firstPoint = worldToScreen(points[0].x, points[0].y);
-    ctx.moveTo(firstPoint.x, firstPoint.y);
-
-    for (let i = 1; i < points.length; i++) {
-      const point = worldToScreen(points[i].x, points[i].y);
-      ctx.lineTo(point.x, point.y);
-    }
-
-    // If mouse is over canvas and we have temp points, draw line to cursor
-    if (mouseWorldPos && points.length > 0) {
-      const cursorScreen = worldToScreen(mouseWorldPos.x, mouseWorldPos.y);
-      ctx.lineTo(cursorScreen.x, cursorScreen.y);
-
-      // If drawing contour, show closing line
-      if (isContour && points.length >= 2) {
-        ctx.lineTo(firstPoint.x, firstPoint.y);
-      }
-    }
-
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Draw points with glow
-    points.forEach(point => {
-      const screenPoint = worldToScreen(point.x, point.y);
-
-      // Outer glow
-      ctx.fillStyle = canvasColors.drawingFill;
-      ctx.beginPath();
-      ctx.arc(screenPoint.x, screenPoint.y, 10, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Main point
-      ctx.fillStyle = canvasColors.drawing;
-      ctx.beginPath();
-      ctx.arc(screenPoint.x, screenPoint.y, 5, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Inner highlight
-      ctx.fillStyle = canvasColors.point;
-      ctx.beginPath();
-      ctx.arc(screenPoint.x, screenPoint.y, 2, 0, Math.PI * 2);
-      ctx.fill();
-    });
-  };
-
-  const drawIntersections = (ctx: CanvasRenderingContext2D) => {
-    intersections.forEach((intersection: IntersectionResult) => {
-      if (intersection.type === IntersectionType.POINT && intersection.point) {
-        const screenPos = worldToScreen(intersection.point.x, intersection.point.y);
-
-        // Outer glow
-        ctx.fillStyle = canvasColors.intersectionFill;
-        ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, 12, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Main point - bright red
-        ctx.fillStyle = canvasColors.intersection;
-        ctx.shadowColor = canvasColors.intersection;
-        ctx.shadowBlur = 8;
-        ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, 6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        // Inner highlight
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, 2, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (intersection.type === IntersectionType.OVERLAP && intersection.segment) {
-        const p1Screen = worldToScreen(intersection.segment.p1.x, intersection.segment.p1.y);
-        const p2Screen = worldToScreen(intersection.segment.p2.x, intersection.segment.p2.y);
-
-        // Glow for overlapping segment
-        ctx.strokeStyle = canvasColors.intersectionGlow;
-        ctx.lineWidth = 8;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(p1Screen.x, p1Screen.y);
-        ctx.lineTo(p2Screen.x, p2Screen.y);
-        ctx.stroke();
-
-        // Main overlapping segment - bright red
-        ctx.strokeStyle = canvasColors.intersection;
-        ctx.lineWidth = 4;
-        ctx.shadowColor = canvasColors.intersection;
-        ctx.shadowBlur = 6;
-        ctx.beginPath();
-        ctx.moveTo(p1Screen.x, p1Screen.y);
-        ctx.lineTo(p2Screen.x, p2Screen.y);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-      }
-    });
-  };
-
-  const drawCursor = (ctx: CanvasRenderingContext2D, worldPos: Point) => {
-    const screenPos = worldToScreen(worldPos.x, worldPos.y);
-
-    // Draw crosshair with subtle glow
-    ctx.strokeStyle = canvasColors.cursor;
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([4, 4]);
-    ctx.shadowColor = canvasColors.cursor;
-    ctx.shadowBlur = 4;
-
-    ctx.beginPath();
-    ctx.moveTo(screenPos.x - 12, screenPos.y);
-    ctx.lineTo(screenPos.x + 12, screenPos.y);
-    ctx.moveTo(screenPos.x, screenPos.y - 12);
-    ctx.lineTo(screenPos.x, screenPos.y + 12);
-    ctx.stroke();
-
-    ctx.setLineDash([]);
-    ctx.shadowBlur = 0;
-
-    // Draw coordinates with background for readability
-    const coordText = `(${worldPos.x.toFixed(2)}, ${worldPos.y.toFixed(2)})`;
-    ctx.font = '11px "SF Mono", "Fira Code", Consolas, monospace';
-    const textWidth = ctx.measureText(coordText).width;
-
-    // Background pill
-    const padding = 6;
-    const bgX = screenPos.x + 14;
-    const bgY = screenPos.y - 22;
-
-    ctx.fillStyle = 'rgba(10, 14, 19, 0.85)';
-    ctx.beginPath();
-    ctx.roundRect(bgX - padding, bgY - 10, textWidth + padding * 2, 18, 4);
-    ctx.fill();
-
-    // Border
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // Text
-    ctx.fillStyle = canvasColors.cursorLabel;
-    ctx.fillText(coordText, bgX, bgY + 4);
-  };
-
-  // Draw performance statistics overlay
-  const drawStats = (ctx: CanvasRenderingContext2D, visibleCount: number, totalCount: number, scale: number) => {
-    if (totalCount === 0) return; // Don't show stats when no shapes
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const statsText = `Rendering: ${visibleCount} / ${totalCount} shapes | Zoom: ${scale.toFixed(3)}x`;
-    ctx.font = '11px "SF Mono", "Fira Code", Consolas, monospace';
-
-    // Position in bottom-left corner
-    const x = 10;
-    const y = canvas.height - 15;
-
-    // Text with dark blue color
-    ctx.fillStyle = '#3ff832ff';
-    ctx.fillText(statsText, x, y);
-  };
+  }, [shapes, transform, tempPoints, drawingMode, mouseWorldPos, worldToScreen, showIntersections, intersections, getVisibleShapes, showStats, drawGrid, drawShapesBatched, drawShape, drawIntersections, drawTempShape, drawCursor, drawStats, canvasColors.background]);
 
   return (
     <canvas
