@@ -25,13 +25,146 @@ export interface IntersectionResult {
 }
 
 /**
+ * Worker result interface
+ */
+interface WorkerResult {
+  success: boolean;
+  results?: Array<{
+    type: 'point' | 'overlap';
+    point?: { x: number; y: number };
+    segment?: { p1: { x: number; y: number }; p2: { x: number; y: number } };
+    shape1: string;
+    shape2: string;
+    segment1Index: number;
+    segment2Index: number;
+  }>;
+  error?: string;
+}
+
+/**
+ * Intermediate result type from worker (before shape reference filling)
+ */
+interface WorkerIntersectionResult {
+  type: 'point' | 'overlap';
+  point?: { x: number; y: number };
+  segment?: { p1: { x: number; y: number }; p2: { x: number; y: number } };
+  shape1: string;
+  shape2: string;
+  segment1Index: number;
+  segment2Index: number;
+}
+
+/**
  * Intersection detector for finding intersections between shapes
+ * Uses a web worker to avoid blocking the main thread
  */
 export class IntersectionDetector {
   private static EPSILON = 1e-9;
+  private static worker: Worker | null = null;
+  private static pendingRequest: { resolve: (results: WorkerIntersectionResult[]) => void; reject: (error: Error) => void } | null = null;
 
   /**
-   * Find intersection between two segments
+   * Initialize the web worker
+   */
+  private static getWorker(): Worker {
+    if (!this.worker) {
+      this.worker = new Worker(
+        new URL('../workers/intersection.worker.ts', import.meta.url),
+        { type: 'module' }
+      );
+
+      this.worker.onmessage = (e: MessageEvent<WorkerResult>) => {
+        if (this.pendingRequest) {
+          const { resolve, reject } = this.pendingRequest;
+          this.pendingRequest = null;
+
+          if (e.data.success && e.data.results) {
+            // Convert worker results to IntersectionResult format
+            const results: WorkerIntersectionResult[] = e.data.results.map(r => ({
+              type: r.type,
+              point: r.point,
+              segment: r.segment,
+              shape1: r.shape1,
+              shape2: r.shape2,
+              segment1Index: r.segment1Index,
+              segment2Index: r.segment2Index
+            }));
+
+            resolve(results);
+          } else {
+            reject(new Error(e.data.error || 'Unknown error in worker'));
+          }
+        }
+      };
+
+      this.worker.onerror = (error) => {
+        if (this.pendingRequest) {
+          const { reject } = this.pendingRequest;
+          this.pendingRequest = null;
+          reject(new Error(`Worker error: ${error.message}`));
+        }
+      };
+    }
+
+    return this.worker;
+  }
+
+  /**
+   * Terminate the worker when no longer needed
+   */
+  static terminateWorker(): void {
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = null;
+      this.pendingRequest = null;
+    }
+  }
+
+  /**
+   * Alternative method: Find intersections with bounding box pre-filtering
+   * This is a simpler O(n²) approach with early rejection
+   * Now runs in a web worker to avoid blocking the main thread
+   */
+  static async findAllIntersectionsSimple(shapes: Shape[]): Promise<IntersectionResult[]> {
+    // Convert shapes to worker format
+    const workerShapes = shapes.map(shape => ({
+      id: shape.id,
+      points: shape.points.map(p => ({ x: p.x, y: p.y })),
+      visible: shape.visible
+    }));
+
+    return new Promise((resolve, reject) => {
+      // If there's a pending request, reject it
+      if (this.pendingRequest) {
+        this.pendingRequest.reject(new Error('Previous intersection detection request was cancelled'));
+      }
+
+      this.pendingRequest = { resolve: (results: WorkerIntersectionResult[]) => {
+        // Fill in shape references and convert to proper types
+        const shapeMap = new Map(shapes.map(s => [s.id, s]));
+        const finalResults: IntersectionResult[] = results.map((r) => ({
+          type: r.type === 'point' ? IntersectionType.POINT : IntersectionType.OVERLAP,
+          point: r.point ? new Point(r.point.x, r.point.y) : undefined,
+          segment: r.segment ? new Segment(
+            new Point(r.segment.p1.x, r.segment.p1.y),
+            new Point(r.segment.p2.x, r.segment.p2.y)
+          ) : undefined,
+          shape1: shapeMap.get(r.shape1)!,
+          shape2: shapeMap.get(r.shape2)!,
+          segment1Index: r.segment1Index,
+          segment2Index: r.segment2Index
+        })).filter((r) => r.shape1 && r.shape2);
+
+        resolve(finalResults);
+      }, reject };
+
+      const worker = this.getWorker();
+      worker.postMessage({ shapes: workerShapes });
+    });
+  }
+
+  /**
+   * Find intersection between two segments (kept for backward compatibility)
    * Returns either a point (IntersectionType.POINT) or a segment (IntersectionType.OVERLAP)
    */
   static findIntersection(seg1: Segment, seg2: Segment): Point | Segment | null {
@@ -72,104 +205,5 @@ export class IntersectionDetector {
     }
 
     return null;
-  }
-
-  /**
-   * Deduplicate intersection results
-   */
-  private static deduplicateResults(results: IntersectionResult[]): IntersectionResult[] {
-    const uniqueResults: IntersectionResult[] = [];
-
-    for (const result of results) {
-      let isDuplicate = false;
-
-      for (const existing of uniqueResults) {
-        // Check if results are essentially the same
-        if (result.type === existing.type) {
-          if (result.type === IntersectionType.POINT && result.point && existing.point) {
-            if (result.point.isNear(existing.point, this.EPSILON)) {
-              isDuplicate = true;
-              break;
-            }
-          } else if (result.type === IntersectionType.OVERLAP && result.segment && existing.segment) {
-            if (result.segment.equals(existing.segment)) {
-              isDuplicate = true;
-              break;
-            }
-          }
-        }
-      }
-
-      if (!isDuplicate) {
-        uniqueResults.push(result);
-      }
-    }
-
-    return uniqueResults;
-  }
-
-  /**
-   * Alternative method: Find intersections with bounding box pre-filtering
-   * This is a simpler O(n²) approach with early rejection
-   */
-  static findAllIntersectionsSimple(shapes: Shape[]): IntersectionResult[] {
-    const results: IntersectionResult[] = [];
-    const segments: Array<{ segment: Segment; index: number; shape: Shape }> = [];
-
-    // Extract all segments from shapes
-    shapes.forEach(shape => {
-      if (!shape.visible || shape.points.length < 2) return;
-
-      for (let i = 0; i < shape.points.length - 1; i++) {
-        const segment = new Segment(shape.points[i], shape.points[i + 1]);
-        segments.push({ segment, index: i, shape });
-      }
-    });
-
-    // Check all pairs
-    for (let i = 0; i < segments.length; i++) {
-      for (let j = i + 1; j < segments.length; j++) {
-        const { segment: seg1, index: idx1, shape: shape1 } = segments[i];
-        const { segment: seg2, index: idx2, shape: shape2 } = segments[j];
-
-        // Skip if segments belong to the same shape
-        if (shape1.id === shape2.id) continue;
-
-        // Bounding box pre-filter
-        if (!this.boundingBoxesIntersect(seg1, seg2)) continue;
-
-        const intersection = this.findIntersection(seg1, seg2);
-
-        if (intersection instanceof Point) {
-          results.push({
-            type: IntersectionType.POINT,
-            point: intersection,
-            shape1,
-            shape2,
-            segment1Index: idx1,
-            segment2Index: idx2
-          });
-        } else if (intersection instanceof Segment) {
-          results.push({
-            type: IntersectionType.OVERLAP,
-            segment: intersection,
-            shape1,
-            shape2,
-            segment1Index: idx1,
-            segment2Index: idx2
-          });
-        }
-      }
-    }
-
-    return this.deduplicateResults(results);
-  }
-
-  /**
-   * Check if bounding boxes of two segments intersect
-   */
-  private static boundingBoxesIntersect(seg1: Segment, seg2: Segment): boolean {
-    return !(seg1.maxX() < seg2.minX() || seg2.maxX() < seg1.minX() ||
-             seg1.maxY() < seg2.minY() || seg2.maxY() < seg1.minY());
   }
 }
