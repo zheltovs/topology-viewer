@@ -426,17 +426,19 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                       onClick={e => e.stopPropagation()}
                     />
                   ) : (
-                    <>
-                      <span style={styles.layerName}>{layer.name}</span>
-                      <span style={styles.layerMeta}>
-                        <span style={styles.layerStat}><ContourIcon color={layer.color} />{contourCount}</span>
-                        <span style={styles.layerStat}><ChainIcon color={layer.color} />{chainCount}</span>
-                        <span style={styles.layerStat}><PointIcon color={tokens.colors.text.tertiary} />{layerShapes.reduce((sum, s) => sum + s.points.length, 0)}</span>
+                    <div style={styles.layerRows}>
+                      <div style={styles.layerTopRow}>
+                        <span style={styles.layerName}>{layer.name}</span>
                         {layer.gdsLayerNumber !== undefined && (
                           <span style={styles.gdsNumber} title="GDS2 layer number from imported file">L{layer.gdsLayerNumber}</span>
                         )}
-                      </span>
-                    </>
+                      </div>
+                      <div style={styles.layerBottomRow}>
+                        <span style={styles.layerStat}><ContourIcon color={layer.color} />{contourCount}</span>
+                        <span style={styles.layerStat}><ChainIcon color={layer.color} />{chainCount}</span>
+                        <span style={styles.layerStat}><PointIcon color={tokens.colors.text.tertiary} />{layerShapes.reduce((sum, s) => sum + s.points.length, 0)}</span>
+                      </div>
+                    </div>
                   )}
                 </div>
 
@@ -819,7 +821,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacing.sm,
-    padding: tokens.spacing.md,
+    padding: tokens.spacing.sm,
     cursor: 'pointer',
     transition: `background ${tokens.transitions.fast}`,
   },
@@ -841,10 +843,12 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   colorPickerWrapper: {
     position: 'relative',
+    display: 'flex',
+    alignItems: 'center',
   },
   colorBtn: {
-    width: '16px',
-    height: '16px',
+    width: '32px',
+    height: '32px',
     borderRadius: '4px',
     border: '1px solid rgba(255,255,255,0.2)',
     cursor: 'pointer',
@@ -879,7 +883,26 @@ const styles: { [key: string]: React.CSSProperties } = {
     minWidth: 0,
     display: 'flex',
     flexDirection: 'column',
+    justifyContent: 'center',
+  },
+  layerRows: {
+    display: 'flex',
+    flexDirection: 'column',
     gap: '2px',
+    width: '100%',
+  },
+  layerTopRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacing.sm,
+    lineHeight: '18px',
+  },
+  layerBottomRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacing.sm,
+    fontSize: tokens.typography.fontSize.xs,
+    color: tokens.colors.text.tertiary,
   },
   layerName: {
     fontSize: tokens.typography.fontSize.sm,
@@ -889,14 +912,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
   },
-  layerMeta: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacing.sm,
-    fontSize: tokens.typography.fontSize.xs,
-    color: tokens.colors.text.tertiary,
-    flexWrap: 'wrap',
-  },
   layerStat: {
     display: 'inline-flex',
     alignItems: 'center',
@@ -904,7 +919,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     flexShrink: 0,
   },
   gdsNumber: {
-    padding: '1px 4px',
+    padding: '2px 5px',
     backgroundColor: 'rgba(121, 75, 196, 0.2)',
     color: '#a78bda',
     borderRadius: '3px',
@@ -912,6 +927,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontWeight: tokens.typography.fontWeight.medium,
     flexShrink: 0,
     whiteSpace: 'nowrap',
+    lineHeight: '14px',
   },
   editInput: {
     width: '100%',

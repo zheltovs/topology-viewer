@@ -4,8 +4,8 @@ import { ObjectsPanel } from './ObjectsPanel';
 import { LayersPanel } from './LayersPanel';
 import { tokens } from '../styles';
 
-const MIN_PANEL_WIDTH = 280;
-const DEFAULT_PANEL_WIDTH = 320;
+const MIN_PANEL_WIDTH = 340;
+const DEFAULT_PANEL_WIDTH = 340;
 
 interface SidePanelProps {
   // Common

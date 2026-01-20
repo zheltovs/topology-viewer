@@ -156,12 +156,10 @@ function App() {
 
   // Change shape color
   const handleChangeColor = useCallback((shapeId: string, color: string) => {
-    const shape = shapes.find(s => s.id === shapeId);
-    if (shape) {
-      shape.color = color;
-      setShapes([...shapes]);
-    }
-  }, [shapes]);
+    setShapes(prev => prev.map(s =>
+      s.id === shapeId ? { ...s, color } : s
+    ));
+  }, []);
 
   // Handle import from file
   const handleImport = useCallback(() => {
@@ -182,7 +180,7 @@ function App() {
           const buffer = await file.arrayBuffer();
           const gds2Parser = new Gds2Parser();
           const layerInfo = gds2Parser.scanLayers(buffer);
-          
+
           setGdsImportState({
             isOpen: true,
             layers: layerInfo.layers,
@@ -254,7 +252,7 @@ function App() {
       const gds2Parser = new Gds2Parser();
       const allowedLayerIds = new Set(selectedLayerIds);
       const layerMap = new Map<string, Layer>(gdsImportState.layers.map(l => [l.id, l]));
-      
+
       const result = gds2Parser.parseWithLayerFilter(
         gdsImportState.fileBuffer,
         allowedLayerIds,
