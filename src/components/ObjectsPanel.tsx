@@ -4,16 +4,8 @@ import { ShapeType } from '../models';
 import { tokens } from '../styles';
 
 // Virtualization constants
-const ITEM_HEIGHT = 88; // Height of each item in pixels (including margin)
+const ITEM_HEIGHT = 52; // Height of each item in pixels (including margin)
 const OVERSCAN = 5; // Number of items to render outside viewport
-
-interface ObjectsPanelProps {
-  shapes: Shape[];
-  onToggleVisibility: (shapeId: string) => void;
-  onSelectShape: (shapeId: string) => void;
-  onDeleteShape: (shapeId: string) => void;
-  onChangeColor: (shapeId: string, color: string) => void;
-}
 
 // Preset colors for shapes
 const SHAPE_COLORS = [
@@ -26,6 +18,14 @@ const SHAPE_COLORS = [
   '#00d4aa', // Teal
   '#ffd400', // Yellow
 ];
+
+interface ObjectsPanelProps {
+  shapes: Shape[];
+  onToggleVisibility: (shapeId: string) => void;
+  onSelectShape: (shapeId: string) => void;
+  onDeleteShape: (shapeId: string) => void;
+  onChangeColor: (shapeId: string, color: string) => void;
+}
 
 // Icon components
 const ChainIcon = ({ color = 'currentColor' }: { color?: string }) => (
@@ -68,7 +68,7 @@ interface ShapeItemProps {
   onToggleVisibility: (shapeId: string) => void;
   onSelectShape: (shapeId: string) => void;
   onDeleteShape: (shapeId: string) => void;
-  onChangeColor: (shapeId: string, color: string) => void;
+  onColorPickerOpen: (shapeId: string, event: React.MouseEvent<HTMLButtonElement>) => void;
 }
 
 const ShapeItem = memo<ShapeItemProps>(({
@@ -77,7 +77,7 @@ const ShapeItem = memo<ShapeItemProps>(({
   onToggleVisibility,
   onSelectShape,
   onDeleteShape,
-  onChangeColor
+  onColorPickerOpen,
 }) => {
   return (
     <div
@@ -88,17 +88,25 @@ const ShapeItem = memo<ShapeItemProps>(({
       }}
       onClick={() => onSelectShape(shape.id)}
     >
-      <div
+      <button
         style={{
-          ...styles.itemIcon,
+          ...styles.itemIconBtn,
           backgroundColor: `${shape.color}20`,
+          borderColor: shape.color,
         }}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!shape.layerId) {
+            onColorPickerOpen(shape.id, e);
+          }
+        }}
+        title={shape.layerId ? 'Remove from layer to change color' : 'Change color'}
       >
         {shape.type === ShapeType.CHAIN
           ? <ChainIcon color={shape.color} />
           : <ContourIcon color={shape.color} />
         }
-      </div>
+      </button>
 
       <div style={styles.itemInfo}>
         <div style={styles.itemName}>
@@ -106,29 +114,6 @@ const ShapeItem = memo<ShapeItemProps>(({
         </div>
         <div style={styles.itemDetails}>
           {shape.points.length} points
-        </div>
-
-        {/* Color picker */}
-        <div style={styles.colorPicker}>
-          {SHAPE_COLORS.map(color => (
-            <button
-              key={color}
-              style={{
-                ...styles.colorButton,
-                backgroundColor: color,
-                ...(shape.color === color ? styles.colorButtonActive : {}),
-                ...(shape.layerId ? styles.colorButtonDisabled : {}),
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!shape.layerId) {
-                  onChangeColor(shape.id, color);
-                }
-              }}
-              title={shape.layerId ? 'Remove from layer to change color' : 'Change color'}
-              disabled={!!shape.layerId}
-            />
-          ))}
         </div>
       </div>
 
@@ -184,6 +169,26 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
   const [scrollTop, setScrollTop] = useState(0);
   const [containerHeight, setContainerHeight] = useState(0);
 
+  // Color picker state
+  const [showColorPicker, setShowColorPicker] = useState<string | null>(null);
+  const [colorPickerPosition, setColorPickerPosition] = useState<{ top: number; left: number } | null>(null);
+  const colorPickerRef = useRef<HTMLDivElement>(null);
+
+  // Close color picker when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (colorPickerRef.current && !colorPickerRef.current.contains(event.target as Node)) {
+        setShowColorPicker(null);
+        setColorPickerPosition(null);
+      }
+    };
+
+    if (showColorPicker) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showColorPicker]);
+
   // Update container height on mount and resize
   useEffect(() => {
     const container = containerRef.current;
@@ -205,6 +210,29 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     setScrollTop(e.currentTarget.scrollTop);
   }, []);
+
+  // Handle color picker open
+  const handleColorPickerOpen = useCallback((shapeId: string, event: React.MouseEvent<HTMLButtonElement>) => {
+    if (showColorPicker === shapeId) {
+      setShowColorPicker(null);
+      setColorPickerPosition(null);
+      return;
+    }
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    setColorPickerPosition({
+      top: rect.bottom + 4,
+      left: rect.left,
+    });
+    setShowColorPicker(shapeId);
+  }, [showColorPicker]);
+
+  // Handle color change
+  const handleColorChange = useCallback((shapeId: string, color: string) => {
+    onChangeColor(shapeId, color);
+    setShowColorPicker(null);
+    setColorPickerPosition(null);
+  }, [onChangeColor]);
 
   // Calculate visible range with overscan
   const { startIndex, visibleShapes, offsetY } = useMemo(() => {
@@ -295,7 +323,8 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
               position: 'absolute',
               top: offsetY,
               left: 0,
-              right: 0
+              right: 0,
+              paddingRight: tokens.spacing.xs
             }}>
               {visibleShapes.map((shape, localIndex) => (
                 <ShapeItem
@@ -305,13 +334,40 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
                   onToggleVisibility={onToggleVisibility}
                   onSelectShape={onSelectShape}
                   onDeleteShape={onDeleteShape}
-                  onChangeColor={onChangeColor}
+                  onColorPickerOpen={handleColorPickerOpen}
                 />
               ))}
             </div>
           </div>
         )}
       </div>
+
+      {/* Color picker popup */}
+      {showColorPicker && colorPickerPosition && (
+        <div
+          ref={colorPickerRef}
+          style={{
+            ...styles.colorPickerPopup,
+            top: colorPickerPosition.top,
+            left: colorPickerPosition.left,
+          }}
+        >
+          {SHAPE_COLORS.map(color => {
+            const currentShape = shapes.find(s => s.id === showColorPicker);
+            return (
+              <button
+                key={color}
+                style={{
+                  ...styles.colorOption,
+                  backgroundColor: color,
+                  ...(currentShape?.color === color ? styles.colorOptionActive : {})
+                }}
+                onClick={() => handleColorChange(showColorPicker, color)}
+              />
+            );
+          })}
+        </div>
+      )}
 
       {/* Footer */}
       {shapes.length > 0 && (
@@ -368,7 +424,8 @@ const styles: { [key: string]: React.CSSProperties } = {
   list: {
     flex: 1,
     overflowY: 'auto',
-    padding: tokens.spacing.md,
+    padding: `${tokens.spacing.md} ${tokens.spacing.sm} ${tokens.spacing.md} ${tokens.spacing.md}`,
+    scrollbarGutter: 'stable',
   },
   emptyState: {
     display: 'flex',
@@ -446,21 +503,22 @@ const styles: { [key: string]: React.CSSProperties } = {
   item: {
     display: 'flex',
     alignItems: 'center',
-    padding: tokens.spacing.md,
-    marginBottom: tokens.spacing.sm,
+    padding: `${tokens.spacing.sm} ${tokens.spacing.md}`,
+    marginBottom: tokens.spacing.xs,
     backgroundColor: tokens.colors.bg.tertiary,
-    borderRadius: tokens.radius.lg,
+    borderRadius: tokens.radius.md,
     border: `1px solid ${tokens.colors.border.subtle}`,
     cursor: 'pointer',
     transition: `all ${tokens.transitions.normal}`,
     outline: 'none',
+    height: '44px',
   },
   itemSelected: {
     backgroundColor: tokens.colors.bg.elevated,
     borderColor: tokens.colors.accent.primary,
     boxShadow: `0 0 0 1px ${tokens.colors.accent.primary}`,
   },
-  itemIcon: {
+  itemIconBtn: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -468,24 +526,32 @@ const styles: { [key: string]: React.CSSProperties } = {
     height: '32px',
     borderRadius: tokens.radius.md,
     marginRight: tokens.spacing.md,
+    border: '1px solid',
+    cursor: 'pointer',
+    transition: `all ${tokens.transitions.fast}`,
+    background: 'transparent',
+    flexShrink: 0,
   },
   itemInfo: {
     flex: 1,
     minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    gap: '2px',
   },
   itemName: {
-    fontSize: tokens.typography.fontSize.md,
+    fontSize: tokens.typography.fontSize.sm,
     fontWeight: tokens.typography.fontWeight.medium,
     color: tokens.colors.text.primary,
-    marginBottom: '2px',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
   },
   itemDetails: {
-    fontSize: tokens.typography.fontSize.sm,
+    fontSize: tokens.typography.fontSize.xs,
     color: tokens.colors.text.tertiary,
-    marginBottom: tokens.spacing.xs,
+    whiteSpace: 'nowrap',
   },
   colorPicker: {
     display: 'flex',
@@ -512,6 +578,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   itemActions: {
     display: 'flex',
     gap: tokens.spacing.xs,
+    marginRight: tokens.spacing.xs,
   },
   actionButton: {
     display: 'flex',
@@ -541,5 +608,29 @@ const styles: { [key: string]: React.CSSProperties } = {
   footerText: {
     fontSize: tokens.typography.fontSize.xs,
     color: tokens.colors.text.tertiary,
+  },
+  colorPickerPopup: {
+    position: 'fixed',
+    display: 'grid',
+    gridTemplateColumns: 'repeat(4, 1fr)',
+    gap: '4px',
+    padding: tokens.spacing.sm,
+    backgroundColor: tokens.colors.bg.elevated,
+    border: `1px solid ${tokens.colors.border.default}`,
+    borderRadius: tokens.radius.md,
+    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+    zIndex: 1000,
+  },
+  colorOption: {
+    width: '24px',
+    height: '24px',
+    borderRadius: '4px',
+    border: '2px solid transparent',
+    cursor: 'pointer',
+    transition: `all ${tokens.transitions.fast}`,
+  },
+  colorOptionActive: {
+    borderColor: 'white',
+    transform: 'scale(1.1)',
   },
 };
