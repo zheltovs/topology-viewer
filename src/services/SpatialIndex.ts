@@ -184,15 +184,40 @@ export class SpatialIndex {
     scale: number = 1
   ): Shape[] {
     const result: Shape[] = [];
-    const visited = new Set<string>();
+
+    // Minimum world diagonal for shape to be visible
+    const minWorldDiagonal = minDiagonalPixels / scale;
 
     const minCellX = Math.floor(viewport.minX / this.cellSize);
     const maxCellX = Math.floor(viewport.maxX / this.cellSize);
     const minCellY = Math.floor(viewport.minY / this.cellSize);
     const maxCellY = Math.floor(viewport.maxY / this.cellSize);
 
-    // Minimum world diagonal for shape to be visible
-    const minWorldDiagonal = minDiagonalPixels / scale;
+    // Calculate how many cells we would need to iterate
+    const cellCountX = maxCellX - minCellX + 1;
+    const cellCountY = maxCellY - minCellY + 1;
+    const totalCells = cellCountX * cellCountY;
+
+    // If viewport covers too many cells, fall back to iterating all shapes with LOD filter
+    // This is more efficient than iterating millions of empty cells
+    const MAX_CELLS_TO_ITERATE = 10000;
+
+    if (totalCells > MAX_CELLS_TO_ITERATE || !isFinite(totalCells)) {
+      // Fall back to direct iteration with LOD filtering only
+      for (const indexed of this.indexedShapes.values()) {
+        // LOD check: skip shapes that are too small to see
+        if (indexed.diagonal < minWorldDiagonal) continue;
+
+        // Viewport intersection check
+        if (boxesIntersect(viewport, indexed.bbox)) {
+          result.push(indexed.shape);
+        }
+      }
+      return result;
+    }
+
+    // Normal grid-based query for reasonable viewport sizes
+    const visited = new Set<string>();
 
     for (let cx = minCellX; cx <= maxCellX; cx++) {
       for (let cy = minCellY; cy <= maxCellY; cy++) {
