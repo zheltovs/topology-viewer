@@ -607,13 +607,39 @@ kbd {
   padding-right: var(--space-sm);
 }
 
+.gds-import-footer {
+  border-top: 1px solid var(--border-subtle);
+  background-color: var(--bg-tertiary);
+}
+
+.gds-clear-canvas-checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-xl) 0;
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.gds-clear-canvas-checkbox:hover {
+  color: var(--text-primary);
+}
+
+.gds-clear-canvas-checkbox input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 .gds-import-actions {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-sm);
   padding: var(--space-lg) var(--space-xl);
-  border-top: 1px solid var(--border-subtle);
-  background-color: var(--bg-tertiary);
 }
 
 .gds-cancel-btn {

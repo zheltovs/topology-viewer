@@ -261,7 +261,7 @@ function App() {
   }, [handleFile]);
 
   // Handle GDS import confirmation
-  const handleGdsImportConfirm = useCallback((selectedLayerIds: string[]) => {
+  const handleGdsImportConfirm = useCallback((selectedLayerIds: string[], clearCanvas: boolean) => {
     if (!gdsImportState.fileBuffer || selectedLayerIds.length === 0) {
       setGdsImportState({ isOpen: false, layers: [], objectCounts: new Map(), fileBuffer: null });
       return;
@@ -279,11 +279,39 @@ function App() {
       );
 
       if (result.shapes.length > 0) {
-        commandHistory.clear();
-        setShapes(result.shapes);
-        setLayers(result.layers);
-        setSelectedShapeIds([]);
-        updateHistoryState();
+        if (clearCanvas) {
+          commandHistory.clear();
+          setShapes(result.shapes);
+          setLayers(result.layers);
+          setSelectedShapeIds([]);
+          updateHistoryState();
+        } else {
+          // Append mode: all new layers are independent — just ensure unique names
+          setLayers(prevLayers => {
+            const existingNames = new Set(prevLayers.map(l => l.name));
+
+            const uniqueLayers = result.layers.map(newLayer => {
+              if (!existingNames.has(newLayer.name)) {
+                existingNames.add(newLayer.name);
+                return newLayer;
+              }
+              // Generate a unique name by appending an incrementing counter
+              let counter = 2;
+              let candidate = `${newLayer.name} (${counter})`;
+              while (existingNames.has(candidate)) {
+                counter++;
+                candidate = `${newLayer.name} (${counter})`;
+              }
+              existingNames.add(candidate);
+              return { ...newLayer, name: candidate };
+            });
+
+            setShapes(prevShapes => [...prevShapes, ...result.shapes]);
+
+            return [...prevLayers, ...uniqueLayers];
+          });
+          setSelectedShapeIds([]);
+        }
       }
     } catch (error) {
       alert(`Error importing GDS: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -462,6 +490,7 @@ function App() {
         <GdsImportDialog
           layers={gdsImportState.layers}
           objectCounts={gdsImportState.objectCounts}
+          hasExistingContent={shapes.length > 0 || layers.length > 0}
           onConfirm={handleGdsImportConfirm}
           onCancel={handleGdsImportCancel}
         />

@@ -4,14 +4,16 @@ import type { Layer } from '../models';
 interface GdsImportDialogProps {
   layers: Layer[];
   objectCounts: Map<string, number>;
-  onConfirm: (selectedLayerIds: string[]) => void;
+  hasExistingContent: boolean;
+  onConfirm: (selectedLayerIds: string[], clearCanvas: boolean) => void;
   onCancel: () => void;
 }
 
-export function GdsImportDialog({ layers, objectCounts, onConfirm, onCancel }: GdsImportDialogProps) {
+export function GdsImportDialog({ layers, objectCounts, hasExistingContent, onConfirm, onCancel }: GdsImportDialogProps) {
   const [selectedLayerIds, setSelectedLayerIds] = useState<Set<string>>(
     new Set(layers.map(l => l.id))
   );
+  const [clearCanvas, setClearCanvas] = useState(true);
 
   // Select all layers by default when layers change
   useEffect(() => {
@@ -39,7 +41,7 @@ export function GdsImportDialog({ layers, objectCounts, onConfirm, onCancel }: G
   };
 
   const handleConfirm = () => {
-    onConfirm(Array.from(selectedLayerIds));
+    onConfirm(Array.from(selectedLayerIds), clearCanvas);
   };
 
   const allSelected = selectedLayerIds.size === layers.length;
@@ -99,20 +101,32 @@ export function GdsImportDialog({ layers, objectCounts, onConfirm, onCancel }: G
           ))}
         </div>
 
-        <div className="gds-import-actions">
-          <button
-            className="gds-cancel-btn"
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-          <button
-            className="gds-confirm-btn"
-            onClick={handleConfirm}
-            disabled={noneSelected}
-          >
-            Import
-          </button>
+        <div className="gds-import-footer">
+          {hasExistingContent && (
+            <label className="gds-clear-canvas-checkbox">
+              <input
+                type="checkbox"
+                checked={clearCanvas}
+                onChange={e => setClearCanvas(e.target.checked)}
+              />
+              <span>Clear canvas before import</span>
+            </label>
+          )}
+          <div className="gds-import-actions">
+            <button
+              className="gds-cancel-btn"
+              onClick={onCancel}
+            >
+              Cancel
+            </button>
+            <button
+              className="gds-confirm-btn"
+              onClick={handleConfirm}
+              disabled={noneSelected}
+            >
+              {hasExistingContent && !clearCanvas ? 'Append' : 'Import'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
