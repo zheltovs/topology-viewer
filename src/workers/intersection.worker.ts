@@ -126,11 +126,15 @@ class Segment {
 
 // Types for worker messages
 interface WorkerInput {
-  shapes: Array<{
-    id: string;
-    points: Array<{ x: number; y: number }>;
-    visible: boolean;
+  segments: Array<{
+    p1: { x: number; y: number };
+    p2: { x: number; y: number };
+    shapeId: string;
+    segmentIndex: number;
   }>;
+  startIndex: number;
+  endIndex: number;
+  totalSegments: number;
 }
 
 interface IntersectionResult {
@@ -188,68 +192,6 @@ function findIntersection(seg1: Segment, seg2: Segment): Point | Segment | null 
   return null;
 }
 
-/**
- * Create a hash key for a point intersection result
- * Uses rounded coordinates to handle floating point precision
- */
-function createPointHashKey(x: number, y: number): string {
-  const precision = 9;
-  const roundX = Math.round(x * Math.pow(10, precision)) / Math.pow(10, precision);
-  const roundY = Math.round(y * Math.pow(10, precision)) / Math.pow(10, precision);
-  return `point_${roundX.toFixed(precision)}_${roundY.toFixed(precision)}`;
-}
-
-/**
- * Create a hash key for a segment overlap result
- * Considers both orders of points (p1,p2) and (p2,p1) as the same
- */
-function createSegmentHashKey(p1: Point, p2: Point): string {
-  const precision = 9;
-  const roundX1 = Math.round(p1.x * Math.pow(10, precision)) / Math.pow(10, precision);
-  const roundY1 = Math.round(p1.y * Math.pow(10, precision)) / Math.pow(10, precision);
-  const roundX2 = Math.round(p2.x * Math.pow(10, precision)) / Math.pow(10, precision);
-  const roundY2 = Math.round(p2.y * Math.pow(10, precision)) / Math.pow(10, precision);
-
-  // Sort coordinates to ensure (p1,p2) and (p2,p1) produce the same key
-  const minPoint = roundX1 < roundX2 || (roundX1 === roundX2 && roundY1 < roundY2)
-    ? `${roundX1.toFixed(precision)}_${roundY1.toFixed(precision)}`
-    : `${roundX2.toFixed(precision)}_${roundY2.toFixed(precision)}`;
-  const maxPoint = roundX1 < roundX2 || (roundX1 === roundX2 && roundY1 < roundY2)
-    ? `${roundX2.toFixed(precision)}_${roundY2.toFixed(precision)}`
-    : `${roundX1.toFixed(precision)}_${roundY1.toFixed(precision)}`;
-
-  return `segment_${minPoint}_${maxPoint}`;
-}
-
-/**
- * Deduplicate intersection results using hash-based approach
- * Much more efficient than O(n²) nested loop comparison
- */
-function deduplicateResults(results: IntersectionResult[]): IntersectionResult[] {
-  const uniqueResults: IntersectionResult[] = [];
-  const seenHashes = new Set<string>();
-
-  for (const result of results) {
-    let hashKey: string;
-
-    if (result.type === 'point' && result.point) {
-      hashKey = createPointHashKey(result.point.x, result.point.y);
-    } else if (result.type === 'overlap' && result.segment) {
-      const p1 = new Point(result.segment.p1.x, result.segment.p1.y);
-      const p2 = new Point(result.segment.p2.x, result.segment.p2.y);
-      hashKey = createSegmentHashKey(p1, p2);
-    } else {
-      continue; // Skip invalid results
-    }
-
-    if (!seenHashes.has(hashKey)) {
-      seenHashes.add(hashKey);
-      uniqueResults.push(result);
-    }
-  }
-
-  return uniqueResults;
-}
 
 /**
  * Check if bounding boxes of two segments intersect
@@ -260,46 +202,48 @@ function boundingBoxesIntersect(seg1: Segment, seg2: Segment): boolean {
 }
 
 /**
- * Find all intersections between shapes
+ * Find all intersections between segments in the assigned range
+ * Processes segment pairs (i, j) where i is in [startIndex, endIndex) and j > i
  */
-function findAllIntersectionsSimple(shapes: WorkerInput['shapes']): IntersectionResult[] {
+function findIntersectionsInRange(input: WorkerInput): IntersectionResult[] {
+  const { segments, startIndex, endIndex, totalSegments } = input;
   const results: IntersectionResult[] = [];
-  const segments: Array<{ segment: Segment; index: number; shapeId: string }> = [];
 
-  // Extract all segments from shapes
-  shapes.forEach(shape => {
-    if (!shape.visible || shape.points.length < 2) return;
+  // Convert segment data to Segment objects once
+  const segmentObjects: Array<{ segment: Segment; shapeId: string; segmentIndex: number }> =
+    segments.map(seg => ({
+      segment: new Segment(
+        new Point(seg.p1.x, seg.p1.y),
+        new Point(seg.p2.x, seg.p2.y)
+      ),
+      shapeId: seg.shapeId,
+      segmentIndex: seg.segmentIndex
+    }));
 
-    for (let i = 0; i < shape.points.length - 1; i++) {
-      const point1 = new Point(shape.points[i].x, shape.points[i].y);
-      const point2 = new Point(shape.points[i + 1].x, shape.points[i + 1].y);
-      const segment = new Segment(point1, point2);
-      segments.push({ segment, index: i, shapeId: shape.id });
-    }
-  });
+  // Process only segment pairs where i is in [startIndex, endIndex)
+  // and j > i to avoid duplicate checks
+  for (let i = startIndex; i < endIndex; i++) {
+    const seg1Data = segmentObjects[i];
 
-  // Check all pairs
-  for (let i = 0; i < segments.length; i++) {
-    for (let j = i + 1; j < segments.length; j++) {
-      const { segment: seg1, index: idx1, shapeId: id1 } = segments[i];
-      const { segment: seg2, index: idx2, shapeId: id2 } = segments[j];
+    for (let j = i + 1; j < totalSegments; j++) {
+      const seg2Data = segmentObjects[j];
 
       // Skip if segments belong to the same shape
-      if (id1 === id2) continue;
+      if (seg1Data.shapeId === seg2Data.shapeId) continue;
 
       // Bounding box pre-filter
-      if (!boundingBoxesIntersect(seg1, seg2)) continue;
+      if (!boundingBoxesIntersect(seg1Data.segment, seg2Data.segment)) continue;
 
-      const intersection = findIntersection(seg1, seg2);
+      const intersection = findIntersection(seg1Data.segment, seg2Data.segment);
 
       if (intersection instanceof Point) {
         results.push({
           type: 'point',
           point: { x: intersection.x, y: intersection.y },
-          shape1: id1,
-          shape2: id2,
-          segment1Index: idx1,
-          segment2Index: idx2
+          shape1: seg1Data.shapeId,
+          shape2: seg2Data.shapeId,
+          segment1Index: seg1Data.segmentIndex,
+          segment2Index: seg2Data.segmentIndex
         });
       } else if (intersection instanceof Segment) {
         results.push({
@@ -308,24 +252,24 @@ function findAllIntersectionsSimple(shapes: WorkerInput['shapes']): Intersection
             p1: { x: intersection.p1.x, y: intersection.p1.y },
             p2: { x: intersection.p2.x, y: intersection.p2.y }
           },
-          shape1: id1,
-          shape2: id2,
-          segment1Index: idx1,
-          segment2Index: idx2
+          shape1: seg1Data.shapeId,
+          shape2: seg2Data.shapeId,
+          segment1Index: seg1Data.segmentIndex,
+          segment2Index: seg2Data.segmentIndex
         });
       }
     }
   }
 
-  return deduplicateResults(results);
+  return results;
 }
 
 // Worker message handler
 self.onmessage = (e: MessageEvent<WorkerInput>) => {
-  const { shapes } = e.data;
+  const { segments, startIndex, endIndex, totalSegments } = e.data;
 
   try {
-    const results = findAllIntersectionsSimple(shapes);
+    const results = findIntersectionsInRange({ segments, startIndex, endIndex, totalSegments });
     self.postMessage({ success: true, results });
   } catch (error) {
     self.postMessage({
