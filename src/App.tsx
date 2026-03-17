@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Canvas, SidePanel, Toolbar, GdsImportDialog } from './components';
 import { Point, Chain, Contour } from './models';
 import type { Shape, Layer } from './models';
@@ -37,6 +37,8 @@ function App() {
     objectCounts: new Map(),
     fileBuffer: null
   });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounterRef = useRef(0);
   const parserRegistry = new ParserRegistry();
 
   // Update undo/redo state
@@ -159,85 +161,104 @@ function App() {
     ));
   }, []);
 
-  // Handle import from file
+  // Process a single imported file (shared by click-import and drag-and-drop)
+  const handleFile = useCallback(async (file: File) => {
+    try {
+      const fileName = file.name.toLowerCase();
+      const isGds = fileName.endsWith('.gds') || fileName.endsWith('.gds2');
+
+      if (isGds) {
+        // For GDS files, show layer selection dialog first
+        const buffer = await file.arrayBuffer();
+        const gds2Parser = new Gds2Parser();
+        const layerInfo = gds2Parser.scanLayers(buffer);
+
+        setGdsImportState({
+          isOpen: true,
+          layers: layerInfo.layers,
+          objectCounts: layerInfo.objectCounts,
+          fileBuffer: buffer
+        });
+      } else {
+        // For other files, import directly
+        const content = await file.text();
+        const lines = content.trim().split('\n');
+        const parser = parserRegistry.getParser();
+        const newShapes: Shape[] = [];
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+
+          const points = parser.parsePoints(line.trim());
+
+          if (points.length < 2) {
+            console.warn('Skipping line with less than 2 points:', line);
+            continue;
+          }
+
+          let newShape: Shape;
+          const firstPoint = points[0];
+          const lastPoint = points[points.length - 1];
+
+          if (firstPoint.equals(lastPoint)) {
+            newShape = new Contour(points);
+          } else {
+            newShape = new Chain(points);
+          }
+
+          newShapes.push(newShape);
+        }
+
+        if (newShapes.length > 0) {
+          commandHistory.clear();
+          setShapes(newShapes);
+          setLayers([]);
+          setSelectedShapeIds([]);
+          updateHistoryState();
+        }
+      }
+    } catch (error) {
+      alert(`Error reading file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }, [commandHistory, updateHistoryState, parserRegistry]);
+
+  // Handle import from file (button click)
   const handleImport = useCallback(() => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.txt,.csv,.gds,.gds2';
-
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-
-      try {
-        const fileName = file.name.toLowerCase();
-        const isGds = fileName.endsWith('.gds') || fileName.endsWith('.gds2');
-
-        if (isGds) {
-          // For GDS files, show layer selection dialog first
-          const buffer = await file.arrayBuffer();
-          const gds2Parser = new Gds2Parser();
-          const layerInfo = gds2Parser.scanLayers(buffer);
-
-          setGdsImportState({
-            isOpen: true,
-            layers: layerInfo.layers,
-            objectCounts: layerInfo.objectCounts,
-            fileBuffer: buffer
-          });
-        } else {
-          // For other files, import directly
-          const content = await file.text();
-          const lines = content.trim().split('\n');
-          const parser = parserRegistry.getParser();
-          const newShapes: Shape[] = [];
-
-          // First, parse all shapes from the file
-          for (const line of lines) {
-            if (!line.trim()) continue;
-
-            // Parse points from coordinates
-            const points = parser.parsePoints(line.trim());
-
-            if (points.length < 2) {
-              console.warn('Skipping line with less than 2 points:', line);
-              continue;
-            }
-
-            // Auto-detect shape type:
-            // If first point equals last point -> contour
-            // Otherwise -> chain
-            let newShape: Shape;
-            const firstPoint = points[0];
-            const lastPoint = points[points.length - 1];
-
-            if (firstPoint.equals(lastPoint)) {
-              // Contour - first and last points match
-              newShape = new Contour(points);
-            } else {
-              // Chain - first and last points don't match
-              newShape = new Chain(points);
-            }
-
-            newShapes.push(newShape);
-          }
-
-          // Clear existing shapes and add all imported shapes
-          if (newShapes.length > 0) {
-            commandHistory.clear();
-            setShapes(newShapes);
-            setLayers([]);
-            setSelectedShapeIds([]);
-            updateHistoryState();
-          }
-        }
-      } catch (error) {
-        alert(`Error reading file: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      }
+      if (file) await handleFile(file);
     };
-
     input.click();
-  }, [commandHistory, updateHistoryState, parserRegistry]);
+  }, [handleFile]);
+
+  // Drag-and-drop handlers
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounterRef.current += 1;
+    if (dragCounterRef.current === 1) setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current === 0) setIsDragging(false);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) await handleFile(file);
+  }, [handleFile]);
 
   // Handle GDS import confirmation
   const handleGdsImportConfirm = useCallback((selectedLayerIds: string[]) => {
@@ -389,7 +410,25 @@ function App() {
       />
 
       <div className="workspace">
-        <div className="canvas-container">
+        <div
+          className="canvas-container"
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+        >
+          {isDragging && (
+            <div className="drop-overlay">
+              <div className="drop-overlay-content">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+                <span>Drop GDS or TXT file to import</span>
+              </div>
+            </div>
+          )}
           <Canvas
             shapes={shapes}
             onAddPoint={handleAddPoint}
