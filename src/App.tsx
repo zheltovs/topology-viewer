@@ -295,7 +295,6 @@ function App() {
                 existingNames.add(newLayer.name);
                 return newLayer;
               }
-              // Generate a unique name by appending an incrementing counter
               let counter = 2;
               let candidate = `${newLayer.name} (${counter})`;
               while (existingNames.has(candidate)) {
@@ -306,10 +305,9 @@ function App() {
               return { ...newLayer, name: candidate };
             });
 
-            setShapes(prevShapes => [...prevShapes, ...result.shapes]);
-
             return [...prevLayers, ...uniqueLayers];
           });
+          setShapes(prevShapes => [...prevShapes, ...result.shapes]);
           setSelectedShapeIds([]);
         }
       }
