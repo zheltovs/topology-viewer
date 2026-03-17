@@ -445,7 +445,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                 {/* Layer actions */}
                 <div style={styles.layerActions}>
                   <button
-                    style={styles.iconBtn}
+                    className={`action-btn ${layer.visible ? '' : 'muted'}`}
                     onClick={() => onToggleLayerVisibility(layer.id)}
                     title={layer.visible ? 'Hide layer' : 'Show layer'}
                   >

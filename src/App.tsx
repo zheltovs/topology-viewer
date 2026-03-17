@@ -118,12 +118,10 @@ function App() {
 
   // Toggle shape visibility
   const handleToggleVisibility = useCallback((shapeId: string) => {
-    const shape = shapes.find(s => s.id === shapeId);
-    if (shape) {
-      shape.visible = !shape.visible;
-      setShapes([...shapes]);
-    }
-  }, [shapes]);
+    setShapes(prev => prev.map(s =>
+      s.id === shapeId ? { ...s, visible: !s.visible } : s
+    ));
+  }, []);
 
   // Select shape (toggle if already selected)
   const handleSelectShape = useCallback((shapeId: string) => {
