@@ -7,6 +7,14 @@ import { useKeyboardShortcuts } from './hooks/useKeyboard';
 import { ParserRegistry, Gds2Parser } from './parsers';
 import './App.css';
 
+export interface GridSettings {
+  enabled: boolean;
+  windowX: number;
+  windowY: number;
+  stepX: number; // 0 = adjacent (same as windowX)
+  stepY: number; // 0 = adjacent (same as windowY)
+}
+
 // State for GDS import dialog
 interface GdsImportState {
   isOpen: boolean;
@@ -31,6 +39,14 @@ function App() {
   });
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  const [scaleFactor, setScaleFactor] = useState(1);
+  const [gridSettings, setGridSettings] = useState<GridSettings>({
+    enabled: false,
+    windowX: 100,
+    windowY: 100,
+    stepX: 0,
+    stepY: 0,
+  });
   const [gdsImportState, setGdsImportState] = useState<GdsImportState>({
     isOpen: false,
     layers: [],
@@ -221,6 +237,15 @@ function App() {
       alert(`Error reading file: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }, [commandHistory, updateHistoryState, parserRegistry]);
+
+  // Apply coordinate scale divisor to all shapes
+  const handleApplyScale = useCallback((divisor: number) => {
+    setScaleFactor(divisor);
+    setShapes(prev => prev.map(shape => ({
+      ...shape,
+      points: shape.points.map(p => new Point(p.x / divisor, p.y / divisor)),
+    })));
+  }, []);
 
   // Handle import from file (button click)
   const handleImport = useCallback(() => {
@@ -433,6 +458,10 @@ function App() {
         showIntersections={showIntersections}
         onToggleIntersections={() => setShowIntersections(!showIntersections)}
         isComputingIntersections={isComputingIntersections}
+        scaleFactor={scaleFactor}
+        onApplyScale={handleApplyScale}
+        gridSettings={gridSettings}
+        onGridSettingsChange={setGridSettings}
       />
 
       <div className="workspace">
@@ -463,6 +492,7 @@ function App() {
             showIntersections={showIntersections}
             showStats={showStats}
             onIntersectionComputingChange={setIsComputingIntersections}
+            gridSettings={gridSettings}
           />
         </div>
 

@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { tokens } from '../styles';
+import type { GridSettings } from '../App';
 
 interface ToolbarProps {
   drawingMode: 'chain' | 'contour' | null;
@@ -13,6 +14,10 @@ interface ToolbarProps {
   showIntersections?: boolean;
   onToggleIntersections?: () => void;
   isComputingIntersections?: boolean;
+  scaleFactor: number;
+  onApplyScale: (divisor: number) => void;
+  gridSettings: GridSettings;
+  onGridSettingsChange: (s: GridSettings) => void;
 }
 
 // Icon components for clean, modern look
@@ -84,8 +89,37 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onRedo,
   showIntersections = false,
   onToggleIntersections,
-  isComputingIntersections = false
+  isComputingIntersections = false,
+  scaleFactor,
+  onApplyScale,
+  gridSettings,
+  onGridSettingsChange,
 }) => {
+  const [scaleInput, setScaleInput] = useState(String(scaleFactor));
+
+  // Local string state for grid inputs
+  const [gwX, setGwX] = useState(String(gridSettings.windowX));
+  const [gwY, setGwY] = useState(String(gridSettings.windowY));
+  const [gsX, setGsX] = useState(gridSettings.stepX > 0 ? String(gridSettings.stepX) : '');
+  const [gsY, setGsY] = useState(gridSettings.stepY > 0 ? String(gridSettings.stepY) : '');
+
+  const applyScale = () => {
+    const val = parseFloat(scaleInput);
+    if (!isNaN(val) && val > 0 && val !== scaleFactor) {
+      onApplyScale(val);
+    }
+  };
+
+  const handleScaleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') applyScale();
+  };
+
+  const applyGridField = (field: 'windowX' | 'windowY' | 'stepX' | 'stepY', raw: string) => {
+    const val = parseFloat(raw);
+    const numVal = isNaN(val) || val < 0 ? 0 : val;
+    onGridSettingsChange({ ...gridSettings, [field]: numVal });
+  };
+
   return (
     <div style={styles.toolbar}>
       {/* Logo / Brand */}
@@ -170,6 +204,85 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </div>
         </div>
       )}
+
+      <div style={styles.divider} />
+
+      {/* Scale Factor */}
+      <div style={styles.toolGroup}>
+        <span style={styles.scaleLabel}>Scale ÷</span>
+        <input
+          type="number"
+          min="0.000001"
+          step="any"
+          value={scaleInput}
+          onChange={e => setScaleInput(e.target.value)}
+          onKeyDown={handleScaleKey}
+          onBlur={applyScale}
+          style={styles.scaleInput}
+          title="Divide all coordinates by this value and redraw (Enter to apply)"
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Window Grid */}
+      <div style={styles.toolGroup}>
+        <label style={styles.gridCheckLabel}>
+          <input
+            type="checkbox"
+            checked={gridSettings.enabled}
+            onChange={e => onGridSettingsChange({ ...gridSettings, enabled: e.target.checked })}
+            style={styles.gridCheckbox}
+          />
+          <span style={styles.scaleLabel}>Grid</span>
+        </label>
+        {gridSettings.enabled && (
+          <>
+            <span style={styles.scaleLabel}>W:</span>
+            <input
+              type="number" min="0" step="any"
+              value={gwX}
+              onChange={e => setGwX(e.target.value)}
+              onBlur={() => applyGridField('windowX', gwX)}
+              onKeyDown={e => { if (e.key === 'Enter') applyGridField('windowX', gwX); }}
+              style={styles.gridInput}
+              title="Window width (world units)"
+            />
+            <span style={styles.scaleLabel}>×</span>
+            <input
+              type="number" min="0" step="any"
+              value={gwY}
+              onChange={e => setGwY(e.target.value)}
+              onBlur={() => applyGridField('windowY', gwY)}
+              onKeyDown={e => { if (e.key === 'Enter') applyGridField('windowY', gwY); }}
+              style={styles.gridInput}
+              title="Window height (world units)"
+            />
+            <span style={styles.scaleLabel}>Step:</span>
+            <input
+              type="number" min="0" step="any"
+              value={gsX}
+              placeholder={gwX || '='}
+              onChange={e => setGsX(e.target.value)}
+              onBlur={() => applyGridField('stepX', gsX)}
+              onKeyDown={e => { if (e.key === 'Enter') applyGridField('stepX', gsX); }}
+              style={styles.gridInput}
+              title="Step X (default: same as window width)"
+            />
+            <span style={styles.scaleLabel}>×</span>
+            <input
+              type="number" min="0" step="any"
+              value={gsY}
+              placeholder={gwY || '='}
+              onChange={e => setGsY(e.target.value)}
+              onBlur={() => applyGridField('stepY', gsY)}
+              onKeyDown={e => { if (e.key === 'Enter') applyGridField('stepY', gsY); }}
+              style={styles.gridInput}
+              title="Step Y (default: same as window height)"
+            />
+          </>
+        )}
+      </div>
 
       <div style={styles.divider} />
 
@@ -342,5 +455,48 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: '50%',
     backgroundColor: tokens.colors.accent.danger,
     animation: 'pulse 2s infinite',
+  },
+  scaleLabel: {
+    fontSize: tokens.typography.fontSize.sm,
+    color: tokens.colors.text.secondary,
+    whiteSpace: 'nowrap' as const,
+  },
+  scaleInput: {
+    width: '72px',
+    height: tokens.components.button.height.md,
+    padding: '0 6px',
+    background: tokens.colors.bg.tertiary,
+    border: `1px solid ${tokens.colors.border.default}`,
+    borderRadius: '4px',
+    color: tokens.colors.text.primary,
+    fontSize: tokens.typography.fontSize.sm,
+    fontFamily: tokens.typography.fontFamily.mono,
+    outline: 'none',
+  },
+  gridCheckLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    cursor: 'pointer',
+    userSelect: 'none' as const,
+  },
+  gridCheckbox: {
+    width: '14px',
+    height: '14px',
+    accentColor: tokens.colors.accent.primary,
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  gridInput: {
+    width: '64px',
+    height: tokens.components.button.height.md,
+    padding: '0 5px',
+    background: tokens.colors.bg.tertiary,
+    border: `1px solid ${tokens.colors.border.default}`,
+    borderRadius: '4px',
+    color: tokens.colors.text.primary,
+    fontSize: tokens.typography.fontSize.sm,
+    fontFamily: tokens.typography.fontFamily.mono,
+    outline: 'none',
   },
 };

@@ -4,6 +4,7 @@ import { Point, ShapeType } from '../models';
 import { IntersectionDetector, IntersectionType, SpatialIndex } from '../services';
 import type { IntersectionResult, BoundingBox } from '../services';
 import { tokens } from '../styles';
+import type { GridSettings } from '../App';
 
 // Dark theme canvas colors
 const canvasColors = {
@@ -37,6 +38,7 @@ interface CanvasProps {
   showIntersections?: boolean;
   showStats?: boolean;
   onIntersectionComputingChange?: (isComputing: boolean) => void;
+  gridSettings?: GridSettings;
 }
 
 interface ViewTransform {
@@ -52,7 +54,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   tempPoints,
   showIntersections = false,
   showStats = false,
-  onIntersectionComputingChange
+  onIntersectionComputingChange,
+  gridSettings,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [transform, setTransform] = useState<ViewTransform>({
@@ -146,6 +149,68 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
     return color;
   }, []);
+
+  // Draw user-defined window grid
+  const drawUserGrid = useCallback((ctx: CanvasRenderingContext2D) => {
+    if (!gridSettings?.enabled || gridSettings.windowX <= 0 || gridSettings.windowY <= 0) return;
+
+    // Only draw if there are visible shapes
+    const visibleShapes = shapes.filter(s => s.visible && s.points.length > 0);
+    if (visibleShapes.length === 0) return;
+
+    // Compute bounding box of all shape points
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const shape of visibleShapes) {
+      for (const p of shape.points) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+
+    const winX = gridSettings.windowX;
+    const winY = gridSettings.windowY;
+    // period = step (distance from start of one window to start of the next).
+    // If step=0 (or unset) windows are adjacent, so period equals the window size.
+    const periodX = gridSettings.stepX > 0 ? gridSettings.stepX : winX;
+    const periodY = gridSettings.stepY > 0 ? gridSettings.stepY : winY;
+
+    // Grid origin is exactly (minX, minY) — first window starts at the bottom-left corner
+    const originX = minX;
+    const originY = minY;
+
+    // Number of columns/rows needed so the last window still starts within the bounding box
+    const cols = Math.floor((maxX - originX) / periodX);
+    const rows = Math.floor((maxY - originY) / periodY);
+
+    // Guard against too many cells
+    if ((cols + 1) * (rows + 1) > 50000) return;
+
+    const screenWinX = winX * transform.scale;
+    const screenWinY = winY * transform.scale;
+    if (screenWinX < 1 || screenWinY < 1) return;
+
+    const colorA = { stroke: 'rgba(255, 80,  80,  0.85)', fill: 'rgba(255, 80,  80,  0.12)' };
+    const colorB = { stroke: 'rgba(50,  220, 120, 0.85)', fill: 'rgba(50,  220, 120, 0.12)' };
+    ctx.lineWidth = 1;
+
+    for (let j = 0; j <= rows; j++) {
+      for (let k = 0; k <= cols; k++) {
+        const color = (k + j) % 2 === 0 ? colorA : colorB;
+        const wx = originX + k * periodX;
+        const wy = originY + j * periodY;
+        // top-left screen corner (world Y up → screen Y down)
+        const topLeft = worldToScreen(wx, wy + winY);
+        ctx.strokeStyle = color.stroke;
+        ctx.fillStyle = color.fill;
+        ctx.beginPath();
+        ctx.rect(topLeft.x, topLeft.y, screenWinX, screenWinY);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+  }, [gridSettings, shapes, worldToScreen, transform.scale]);
 
   // Draw coordinate axes and grid
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D, width: number, height: number) => {
@@ -815,6 +880,9 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Draw coordinate axes and grid
     drawGrid(ctx, canvas.width, canvas.height);
 
+    // Draw user window grid (if enabled)
+    drawUserGrid(ctx);
+
     // Get only visible shapes using spatial index with LOD culling
     const visibleShapes = getVisibleShapes();
 
@@ -870,7 +938,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     // Restore context
     ctx.restore();
-  }, [shapes, transform, tempPoints, drawingMode, mouseWorldPos, worldToScreen, showIntersections, intersections, getVisibleShapes, showStats, drawGrid, drawShapesBatched, drawShape, drawIntersections, drawTempShape, drawCursor, drawStats, canvasColors.background]);
+  }, [shapes, transform, tempPoints, drawingMode, mouseWorldPos, worldToScreen, showIntersections, intersections, getVisibleShapes, showStats, drawGrid, drawUserGrid, drawShapesBatched, drawShape, drawIntersections, drawTempShape, drawCursor, drawStats, canvasColors.background]);
 
   return (
     <canvas
