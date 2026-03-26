@@ -39,27 +39,19 @@ Node.js 20+ and npm.
 
 ```bash
 npm install
-npm run dev          # http://localhost:5173
+npm run dev
 ```
 
 ### Docker
 
 ```bash
-docker compose --profile dev up --build    # dev с hot reload на :5173
-docker compose --profile prod up --build   # prod nginx на :80
+docker compose --profile dev up --build
+docker compose --profile prod up --build
 ```
 
 ### Build
 
 ```bash
-npm run build        # выход в dist/
-npm run preview      # preview production build
+npm run build
+npm run preview
 ```
-
-### Deploy (GitHub Pages)
-
-Push в `main` → GitHub Actions собирает и деплоит автоматически (см. `.github/workflows/deploy.yml`).
-
-## Tech Stack
-
-React 19 · TypeScript · Vite · HTML5 Canvas
