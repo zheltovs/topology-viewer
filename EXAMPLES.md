@@ -4,55 +4,61 @@ This file contains example shapes you can import into the topology viewer.
 
 ## File Format
 
-Each line contains a type (`chain` or `contour`) followed by coordinates:
+Each line contains comma-separated coordinates:
 
 ```
-type: x1, y1, x2, y2, x3, y3, ...
+x1, y1, x2, y2, x3, y3, ...
 ```
+
+The shape type is determined automatically:
+- If the first and last points are the same → **contour** (closed polygon)
+- Otherwise → **chain** (open polyline)
 
 ## Example File Content
 
 Save this content to a .txt file and use the Import button:
 
 ```
-chain: 0, 0, 5, 10, 10, 0, 15, 10, 20, 0
-contour: 0, 0, 10.5, 0, 5.25, 9.1
-contour: 0, 0, 10, 0, 10, 10, 0, 10
-contour: 0, 10, 9.51, 3.09, 5.88, -8.09, -5.88, -8.09, -9.51, 3.09
-chain: 0, 0, 10, 0, 10, 10, -5, 10, -5, -5, 15, -5, 15, 15, -10, 15
-contour: 0, 10, 2.4, 3.1, 9.5, 3.1, 3.8, -1, 6, -8, 0, -3, -6, -8, -3.8, -1, -9.5, 3.1, -2.4, 3.1
+0, 0, 5, 10, 10, 0, 15, 10, 20, 0
+0, 0, 10.5, 0, 5.25, 9.1, 0, 0
+0, 0, 10, 0, 10, 10, 0, 10, 0, 0
+0, 10, 9.51, 3.09, 5.88, -8.09, -5.88, -8.09, -9.51, 3.09, 0, 10
+0, 0, 10, 0, 10, 10, -5, 10, -5, -5, 15, -5, 15, 15, -10, 15
+0, 10, 2.4, 3.1, 9.5, 3.1, 3.8, -1, 6, -8, 0, -3, -6, -8, -3.8, -1, -9.5, 3.1, -2.4, 3.1, 0, 10
 ```
 
 ## Individual Examples
 
 ### Triangle (Contour)
+Repeat the first point at the end to close the shape:
 ```
-contour: 0, 0, 10.5, 0, 5.25, 9.1
+0, 0, 10.5, 0, 5.25, 9.1, 0, 0
 ```
 
 ### Square (Contour)
 ```
-contour: 0, 0, 10, 0, 10, 10, 0, 10
+0, 0, 10, 0, 10, 10, 0, 10, 0, 0
 ```
 
 ### Zigzag Line (Chain)
+First and last points differ — treated as a chain:
 ```
-chain: 0, 0, 5, 10, 10, 0, 15, 10, 20, 0
+0, 0, 5, 10, 10, 0, 15, 10, 20, 0
 ```
 
 ### Pentagon (Contour)
 ```
-contour: 0, 10, 9.51, 3.09, 5.88, -8.09, -5.88, -8.09, -9.51, 3.09
+0, 10, 9.51, 3.09, 5.88, -8.09, -5.88, -8.09, -9.51, 3.09, 0, 10
 ```
 
 ### Spiral-like Chain
 ```
-chain: 0, 0, 10, 0, 10, 10, -5, 10, -5, -5, 15, -5, 15, 15, -10, 15
+0, 0, 10, 0, 10, 10, -5, 10, -5, -5, 15, -5, 15, 15, -10, 15
 ```
 
 ### Star (Contour)
 ```
-contour: 0, 10, 2.4, 3.1, 9.5, 3.1, 3.8, -1, 6, -8, 0, -3, -6, -8, -3.8, -1, -9.5, 3.1, -2.4, 3.1
+0, 10, 2.4, 3.1, 9.5, 3.1, 3.8, -1, 6, -8, 0, -3, -6, -8, -3.8, -1, -9.5, 3.1, -2.4, 3.1, 0, 10
 ```
 
 ## How to Use

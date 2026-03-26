@@ -143,25 +143,23 @@ function App() {
 
   // Select shape (toggle if already selected)
   const handleSelectShape = useCallback((shapeId: string) => {
-    const isAlreadySelected = selectedShapeIds.includes(shapeId);
-
-    if (isAlreadySelected) {
-      // Deselect if already selected
-      setShapes(shapes.map(s => ({ ...s, selected: false })));
-      setSelectedShapeIds([]);
-    } else {
-      // Select new shape
-      setShapes(shapes.map(s => s.id === shapeId ? { ...s, selected: true } : { ...s, selected: false }));
-      setSelectedShapeIds([shapeId]);
-    }
-  }, [shapes, selectedShapeIds]);
+    setSelectedShapeIds(prevIds => {
+      const isAlreadySelected = prevIds.includes(shapeId);
+      if (isAlreadySelected) {
+        setShapes(prev => prev.map(s => ({ ...s, selected: false })));
+        return [];
+      } else {
+        setShapes(prev => prev.map(s => s.id === shapeId ? { ...s, selected: true } : { ...s, selected: false }));
+        return [shapeId];
+      }
+    });
+  }, []);
 
   // Select multiple shapes (for layers panel)
   const handleSelectShapes = useCallback((shapeIds: string[]) => {
-    shapes.forEach(s => s.selected = shapeIds.includes(s.id));
-    setShapes([...shapes]);
+    setShapes(prev => prev.map(s => ({ ...s, selected: shapeIds.includes(s.id) })));
     setSelectedShapeIds(shapeIds);
-  }, [shapes]);
+  }, []);
 
   // Delete shape
   const handleDeleteShape = useCallback((shapeId: string) => {
@@ -239,11 +237,15 @@ function App() {
   }, [commandHistory, updateHistoryState, parserRegistry]);
 
   // Apply coordinate scale divisor to all shapes
-  const handleApplyScale = useCallback((divisor: number) => {
-    setScaleFactor(divisor);
+  const scaleFactorRef = useRef(1);
+  const handleApplyScale = useCallback((newDivisor: number) => {
+    const oldDivisor = scaleFactorRef.current;
+    const ratio = oldDivisor / newDivisor;
+    scaleFactorRef.current = newDivisor;
+    setScaleFactor(newDivisor);
     setShapes(prev => prev.map(shape => ({
       ...shape,
-      points: shape.points.map(p => new Point(p.x / divisor, p.y / divisor)),
+      points: shape.points.map(p => new Point(p.x * ratio, p.y * ratio)),
     })));
   }, []);
 

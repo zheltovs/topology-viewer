@@ -719,8 +719,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
     const newScale = transform.scale * zoomFactor;
 
-    // Clamp scale - only maximum limit, no minimum limit
-    const clampedScale = Math.min(10, newScale);
+    // Clamp scale - generous limits to allow zooming into small coordinates
+    const clampedScale = Math.min(1e8, newScale);
 
     // Zoom relative to screen center
     // Calculate world coordinates of screen center before zoom
