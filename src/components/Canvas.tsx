@@ -331,11 +331,13 @@ export const Canvas: React.FC<CanvasProps> = ({
   // Batched rendering for non-selected shapes - reduces draw calls significantly
   const drawShapesBatched = useCallback((ctx: CanvasRenderingContext2D, shapesByColor: Map<string, Shape[]>) => {
     // LOD: Simplify geometry when zoomed out - progressive scaling
-    // At scale=1: 4px, at scale=0.1: 8px, at scale=0.01: 12px
-    const basePixelDistance = 4;
+    // At scale=1: 2px, at scale=0.1: 4px, at scale=0.01: 6px
+    const basePixelDistance = 2;
     const distanceScaleFactor = Math.max(1, 1 + Math.log10(1 / Math.max(transform.scale, 0.001)));
     const minPixelDistance = basePixelDistance * distanceScaleFactor;
     const minWorldDistance = minPixelDistance / transform.scale;
+    // Angle threshold for preserving geometrically significant corners (cosine of 15°)
+    const cosAngleThreshold = Math.cos(15 * Math.PI / 180);
 
     // Whether to draw individual points - progressive threshold
     // Points become noise earlier at low zoom levels
@@ -367,24 +369,57 @@ export const Canvas: React.FC<CanvasProps> = ({
         const firstPoint = worldToScreen(shape.points[0].x, shape.points[0].y);
         ctx.moveTo(firstPoint.x, firstPoint.y);
 
+        // For contours, enforce minimum rendered point count to preserve shape topology
+        const minRenderedPoints = isContour ? Math.min(4, shape.points.length - 1) : 0;
+        let renderedCount = 1; // first point already rendered
         let lastRenderedPoint = shape.points[0];
         for (let i = 1; i < shape.points.length; i++) {
           const currentPoint = shape.points[i];
 
-          // LOD: Skip intermediate points that are too close
+          // LOD: Skip intermediate points that are too close, but preserve corners
           if (i < shape.points.length - 1) {
             const dx = currentPoint.x - lastRenderedPoint.x;
             const dy = currentPoint.y - lastRenderedPoint.y;
             const distance = Math.sqrt(dx * dx + dy * dy);
 
             if (distance < minWorldDistance) {
-              continue;
+              // Check if this point is a significant corner by measuring direction change
+              // Compare incoming vector (lastRendered → current) with outgoing vector (current → next)
+              const nextPoint = shape.points[i + 1];
+              const nx = nextPoint.x - currentPoint.x;
+              const ny = nextPoint.y - currentPoint.y;
+              const nextDist = Math.sqrt(nx * nx + ny * ny);
+
+              if (nextDist > 0 && distance > 0) {
+                // Cosine of angle between vectors: dot(v1,v2) / (|v1|*|v2|)
+                const dot = dx * nx + dy * ny;
+                const cosAngle = dot / (distance * nextDist);
+                // If angle deviation from straight (cos=1) is significant, keep the point
+                if (cosAngle < cosAngleThreshold) {
+                  // This is a corner — do not skip
+                } else {
+                  continue;
+                }
+              } else {
+                continue;
+              }
             }
           }
 
           const point = worldToScreen(currentPoint.x, currentPoint.y);
           ctx.lineTo(point.x, point.y);
           lastRenderedPoint = currentPoint;
+          renderedCount++;
+        }
+
+        // Safety net: if contour lost too many points, re-render with all points
+        if (isContour && renderedCount < minRenderedPoints) {
+          const firstPt = worldToScreen(shape.points[0].x, shape.points[0].y);
+          ctx.moveTo(firstPt.x, firstPt.y);
+          for (let i = 1; i < shape.points.length; i++) {
+            const pt = worldToScreen(shape.points[i].x, shape.points[i].y);
+            ctx.lineTo(pt.x, pt.y);
+          }
         }
 
         if (isContour) {
@@ -459,37 +494,70 @@ export const Canvas: React.FC<CanvasProps> = ({
     ctx.lineJoin = 'round';
 
     // LOD: Simplify geometry when zoomed out - progressive scaling
-    // At scale=1: 4px, at scale=0.1: 8px, at scale=0.01: 12px
-    const basePixelDistance = 4;
+    // At scale=1: 2px, at scale=0.1: 4px, at scale=0.01: 6px
+    const basePixelDistance = 2;
     const distanceScaleFactor = Math.max(1, 1 + Math.log10(1 / Math.max(transform.scale, 0.001)));
     const minPixelDistance = basePixelDistance * distanceScaleFactor;
     const minWorldDistance = minPixelDistance / transform.scale;
+    // Angle threshold for preserving geometrically significant corners (cosine of 15°)
+    const cosAngleThreshold = Math.cos(15 * Math.PI / 180);
 
     ctx.beginPath();
     const firstPoint = worldToScreen(shape.points[0].x, shape.points[0].y);
     ctx.moveTo(firstPoint.x, firstPoint.y);
 
+    // For contours, enforce minimum rendered point count to preserve shape topology
+    const minRenderedPoints = isContour ? Math.min(4, shape.points.length - 1) : 0;
+    let renderedCount = 1; // first point already rendered
     let lastRenderedPoint = shape.points[0];
     for (let i = 1; i < shape.points.length; i++) {
       const currentPoint = shape.points[i];
 
-      // LOD: Skip intermediate points that are too close (except for the last point)
+      // LOD: Skip intermediate points that are too close, but preserve corners
       if (i < shape.points.length - 1) {
         const dx = currentPoint.x - lastRenderedPoint.x;
         const dy = currentPoint.y - lastRenderedPoint.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
 
         if (distance < minWorldDistance) {
-          continue; // Skip this point
+          // Check if this point is a significant corner by measuring direction change
+          const nextPoint = shape.points[i + 1];
+          const nx = nextPoint.x - currentPoint.x;
+          const ny = nextPoint.y - currentPoint.y;
+          const nextDist = Math.sqrt(nx * nx + ny * ny);
+
+          if (nextDist > 0 && distance > 0) {
+            const dot = dx * nx + dy * ny;
+            const cosAngle = dot / (distance * nextDist);
+            if (cosAngle < cosAngleThreshold) {
+              // This is a corner — do not skip
+            } else {
+              continue;
+            }
+          } else {
+            continue;
+          }
         }
       }
 
       const point = worldToScreen(currentPoint.x, currentPoint.y);
       ctx.lineTo(point.x, point.y);
       lastRenderedPoint = currentPoint;
+      renderedCount++;
     }
 
-    if (isContour) {
+    // Safety net: if contour lost too many points, re-render with all points
+    if (isContour && renderedCount < minRenderedPoints) {
+      ctx.beginPath();
+      const firstPt = worldToScreen(shape.points[0].x, shape.points[0].y);
+      ctx.moveTo(firstPt.x, firstPt.y);
+      for (let i = 1; i < shape.points.length; i++) {
+        const pt = worldToScreen(shape.points[i].x, shape.points[i].y);
+        ctx.lineTo(pt.x, pt.y);
+      }
+      ctx.closePath();
+      ctx.fill();
+    } else if (isContour) {
       ctx.closePath();
       ctx.fill();
     }
