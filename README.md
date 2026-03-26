@@ -1,131 +1,65 @@
 # Topology Viewer
 
-A powerful web-based tool for visualizing and editing geometric shapes (chains and contours) with an interactive canvas interface.
+Web-based viewer/editor for geometric topology — chains (open polylines) and contours (closed polygons) on an interactive HTML5 Canvas.
 
 ## Features
 
-- **Interactive Drawing**: Create chains (open polylines) and contours (closed polygons) with click-to-add points
-- **Smart Contour Creation**: Contours automatically close when you press Esc
-- **Pan & Zoom**: Navigate the canvas with mouse wheel zoom and Alt+drag panning
-- **Coordinate Grid**: Axes with labeled coordinates for precise positioning
-- **Undo/Redo**: Full history support with Ctrl+Z/Ctrl+Y shortcuts
-- **Objects Panel**: View and manage all geometric shapes
-- **Import Support**: Import shapes from text files (.txt, .csv) or GDS2 layout files (.gds, .gds2)
-- **Double Precision**: All coordinates use double-precision floating-point numbers
-- **Extensible Architecture**: Parser interface allows easy addition of new input formats
+- **Drawing** — create chains and contours by clicking points on the canvas
+- **Layers** — organize shapes into colored layers with visibility toggles (auto-created on GDS2 import)
+- **Import / Export** — text files (`.txt`, `.csv`) and binary GDS2 (`.gds`, `.gds2`)
+- **Intersection detection** — find point and overlap intersections between shapes (runs in a Web Worker)
+- **Configurable grid overlay** — adjustable window size and step
+- **Scale divisor** — divide all coordinates by a given factor
+- **Pan & Zoom** — mouse wheel zoom, Alt+drag or middle-button pan
+- **Undo / Redo** — full command history
+- **Viewport culling & LOD** — efficient rendering via spatial index
 
-## Getting Started
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+1` | Chain drawing mode |
+| `Ctrl+2` | Contour drawing mode |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Y` / `Ctrl+Shift+Z` | Redo |
+| `Ctrl+I` | Toggle stats overlay |
+| `Esc` | Finish drawing / cancel |
+
+### Import Format (text)
+
+One shape per line: `type: x1, y1, x2, y2, ...` where type is `chain` or `contour` (see [EXAMPLES.md](EXAMPLES.md)).
+
+## Development
 
 ### Prerequisites
 
-- Node.js 18+ and npm
+Node.js 20+ and npm.
 
-### Installation
+### Local
 
 ```bash
 npm install
+npm run dev          # http://localhost:5173
 ```
 
-### Development
+### Docker
 
 ```bash
-npm run dev
+docker compose --profile dev up --build    # dev с hot reload на :5173
+docker compose --profile prod up --build   # prod nginx на :80
 ```
-
-Open your browser to the displayed localhost URL (typically http://localhost:5173)
 
 ### Build
 
 ```bash
-npm run build
+npm run build        # выход в dist/
+npm run preview      # preview production build
 ```
 
-## Usage
+### Deploy (GitHub Pages)
 
-### Drawing Shapes
+Push в `main` → GitHub Actions собирает и деплоит автоматически (см. `.github/workflows/deploy.yml`).
 
-1. **Draw Chain**: Click the "📏 Chain" button (or press Ctrl+1), then click on the canvas to add points. Press Esc to finish.
+## Tech Stack
 
-2. **Draw Contour**: Click the "⬡ Contour" button (or press Ctrl+2), then click to add points. Press Esc to finish and auto-close the contour.
-
-### Navigation
-
-- **Zoom**: Use mouse wheel
-- **Pan**: Hold Alt and drag, or use middle mouse button
-
-### Keyboard Shortcuts
-
-- `Ctrl+1` - Toggle Chain drawing mode
-- `Ctrl+2` - Toggle Contour drawing mode
-- `Ctrl+Z` - Undo last action
-- `Ctrl+Y` - Redo
-- `Esc` - Finish current drawing
-
-### Import Formats
-
-#### Text (.txt, .csv)
-
-Import shapes from a text file. Each line should contain the type and coordinates:
-
-```
-type: x1, y1, x2, y2, x3, y3, ...
-```
-
-Where `type` is either `chain` or `contour`.
-
-Example file (see [example-shapes.txt](example-shapes.txt)):
-```
-chain: 0, 0, 5, 10, 10, 0, 15, 10, 20, 0
-contour: 0, 0, 10.5, 0, 5.25, 9.1
-contour: 0, 0, 10, 0, 10, 10, 0, 10
-```
-
-#### GDS2 (.gds, .gds2)
-
-Import GDS2 stream files. The importer reads `BOUNDARY` records as contours and `PATH` records as chains, preserving raw integer coordinates (no unit scaling).
-
-To import:
-1. Click the "📥 Import" button
-2. Select a .txt, .csv, .gds, or .gds2 file
-3. All shapes will be loaded onto the canvas
-
-## Architecture
-
-### Project Structure
-
-```
-src/
-├── components/       # React components (Canvas, Toolbar, ObjectsPanel)
-├── models/          # Domain models (Point, Chain, Contour)
-├── parsers/         # Input format parsers (extensible)
-├── services/        # Business logic (CommandHistory for undo/redo)
-├── hooks/           # Custom React hooks (keyboard shortcuts)
-└── utils/           # Utility functions
-```
-
-### Extensibility
-
-The parser system uses a Strategy pattern, making it easy to add new input formats:
-
-```typescript
-class MyCustomParser implements ShapeParser {
-  parsePoints(input: string): Point[] {
-    // Your custom parsing logic
-  }
-  // ...
-}
-
-// Register your parser
-parserRegistry.registerParser('custom', new MyCustomParser());
-```
-
-## Technology Stack
-
-- **React 18** - UI framework
-- **TypeScript** - Type safety
-- **Vite** - Build tool and dev server
-- **HTML5 Canvas** - Rendering engine
-
-## License
-
-MIT
+React 19 · TypeScript · Vite · HTML5 Canvas
