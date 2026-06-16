@@ -1,6 +1,7 @@
 import { Point, Chain, Contour, createLayer, LAYER_COLORS } from '../models';
 import type { Shape, Layer } from '../models';
 import type { BinaryShapeParser } from './ShapeParser';
+import { strokePathToPoints } from './strokePath';
 
 const RecordType = {
   Header: 0x00,
@@ -40,6 +41,8 @@ const RecordType = {
   PropValue: 0x2c,
   Box: 0x2d,
   BoxType: 0x2e,
+  BgnExtn: 0x30,
+  EndExtn: 0x31,
 } as const;
 
 const DataType = {
@@ -63,6 +66,34 @@ export interface Gds2ParseResult {
 export interface Gds2LayerInfo {
   layers: Layer[];
   objectCounts: Map<string, number>; // layerId -> object count
+}
+
+/**
+ * Builds the viewer shape for a parsed GDSII element. Boundaries become filled
+ * contours; paths with a positive WIDTH are stroked into a filled ribbon
+ * (Contour) honoring PATHTYPE/BGNEXTN/ENDEXTN, while zero-width paths keep their
+ * open centerline (Chain) since GDSII permits widthless paths.
+ */
+function buildElementShape(
+  type: 'boundary' | 'path',
+  points: Point[],
+  width: number,
+  pathType: number,
+  bgnExtn: number,
+  endExtn: number,
+  color: string,
+  layerId: string
+): Shape {
+  if (type === 'boundary') {
+    return new Contour(points, undefined, color, layerId);
+  }
+  if (width > 0) {
+    const ring = strokePathToPoints(points, width, pathType, bgnExtn, endExtn);
+    if (ring && ring.length >= 3) {
+      return new Contour(ring, undefined, color, layerId);
+    }
+  }
+  return new Chain(points, undefined, color, layerId);
 }
 
 export class Gds2Parser implements BinaryShapeParser {
@@ -166,6 +197,10 @@ export class Gds2Parser implements BinaryShapeParser {
     let currentType: 'boundary' | 'path' | null = null;
     let currentPoints: Point[] = [];
     let currentGdsLayer: number | null = null;
+    let currentWidth = 0;
+    let currentPathType = 0;
+    let currentBgnExtn = 0;
+    let currentEndExtn = 0;
 
     const finalizeElement = () => {
       if (!currentType) return;
@@ -173,7 +208,7 @@ export class Gds2Parser implements BinaryShapeParser {
       const minPoints = currentType === 'boundary' ? 3 : 2;
       if (currentPoints.length >= minPoints) {
         const gdsLayerNum = currentGdsLayer ?? 0;
-        
+
         // Find layer by GDS number
         let layer: Layer | undefined;
         for (const [id, l] of layerMap) {
@@ -186,9 +221,10 @@ export class Gds2Parser implements BinaryShapeParser {
         // Only add shape if layer is allowed
         if (layer) {
           usedLayers.set(layer.id, layer);
-          const shape = currentType === 'boundary'
-            ? new Contour(currentPoints, undefined, layer.color, layer.id)
-            : new Chain(currentPoints, undefined, layer.color, layer.id);
+          const shape = buildElementShape(
+            currentType, currentPoints, currentWidth, currentPathType,
+            currentBgnExtn, currentEndExtn, layer.color, layer.id
+          );
           shapes.push(shape);
         }
       }
@@ -196,6 +232,10 @@ export class Gds2Parser implements BinaryShapeParser {
       currentType = null;
       currentPoints = [];
       currentGdsLayer = null;
+      currentWidth = 0;
+      currentPathType = 0;
+      currentBgnExtn = 0;
+      currentEndExtn = 0;
     };
 
     while (offset + RECORD_HEADER_SIZE <= view.byteLength) {
@@ -221,12 +261,40 @@ export class Gds2Parser implements BinaryShapeParser {
           currentType = 'boundary';
           currentPoints = [];
           currentGdsLayer = null;
+          currentWidth = 0;
+          currentPathType = 0;
+          currentBgnExtn = 0;
+          currentEndExtn = 0;
           break;
         case RecordType.Path:
           finalizeElement();
           currentType = 'path';
           currentPoints = [];
           currentGdsLayer = null;
+          currentWidth = 0;
+          currentPathType = 0;
+          currentBgnExtn = 0;
+          currentEndExtn = 0;
+          break;
+        case RecordType.Width:
+          if (dataType === DataType.Int4 && dataLength >= 4) {
+            currentWidth = view.getInt32(dataOffset, false);
+          }
+          break;
+        case RecordType.PathType:
+          if (dataType === DataType.Int2 && dataLength >= 2) {
+            currentPathType = view.getInt16(dataOffset, false);
+          }
+          break;
+        case RecordType.BgnExtn:
+          if (dataType === DataType.Int4 && dataLength >= 4) {
+            currentBgnExtn = view.getInt32(dataOffset, false);
+          }
+          break;
+        case RecordType.EndExtn:
+          if (dataType === DataType.Int4 && dataLength >= 4) {
+            currentEndExtn = view.getInt32(dataOffset, false);
+          }
           break;
         case RecordType.Layer:
           if (dataType === DataType.Int2 && dataLength >= 2) {
@@ -272,6 +340,10 @@ export class Gds2Parser implements BinaryShapeParser {
     let currentType: 'boundary' | 'path' | null = null;
     let currentPoints: Point[] = [];
     let currentGdsLayer: number | null = null;
+    let currentWidth = 0;
+    let currentPathType = 0;
+    let currentBgnExtn = 0;
+    let currentEndExtn = 0;
 
     const getOrCreateLayer = (gdsLayerNum: number): Layer => {
       if (!layerMap.has(gdsLayerNum)) {
@@ -294,16 +366,21 @@ export class Gds2Parser implements BinaryShapeParser {
         // Get or create layer for this GDS layer number
         const gdsLayerNum = currentGdsLayer ?? 0;
         const layer = getOrCreateLayer(gdsLayerNum);
-        
-        const shape = currentType === 'boundary'
-          ? new Contour(currentPoints, undefined, layer.color, layer.id)
-          : new Chain(currentPoints, undefined, layer.color, layer.id);
+
+        const shape = buildElementShape(
+          currentType, currentPoints, currentWidth, currentPathType,
+          currentBgnExtn, currentEndExtn, layer.color, layer.id
+        );
         shapes.push(shape);
       }
 
       currentType = null;
       currentPoints = [];
       currentGdsLayer = null;
+      currentWidth = 0;
+      currentPathType = 0;
+      currentBgnExtn = 0;
+      currentEndExtn = 0;
     };
 
     while (offset + RECORD_HEADER_SIZE <= view.byteLength) {
@@ -329,12 +406,40 @@ export class Gds2Parser implements BinaryShapeParser {
           currentType = 'boundary';
           currentPoints = [];
           currentGdsLayer = null;
+          currentWidth = 0;
+          currentPathType = 0;
+          currentBgnExtn = 0;
+          currentEndExtn = 0;
           break;
         case RecordType.Path:
           finalizeElement();
           currentType = 'path';
           currentPoints = [];
           currentGdsLayer = null;
+          currentWidth = 0;
+          currentPathType = 0;
+          currentBgnExtn = 0;
+          currentEndExtn = 0;
+          break;
+        case RecordType.Width:
+          if (dataType === DataType.Int4 && dataLength >= 4) {
+            currentWidth = view.getInt32(dataOffset, false);
+          }
+          break;
+        case RecordType.PathType:
+          if (dataType === DataType.Int2 && dataLength >= 2) {
+            currentPathType = view.getInt16(dataOffset, false);
+          }
+          break;
+        case RecordType.BgnExtn:
+          if (dataType === DataType.Int4 && dataLength >= 4) {
+            currentBgnExtn = view.getInt32(dataOffset, false);
+          }
+          break;
+        case RecordType.EndExtn:
+          if (dataType === DataType.Int4 && dataLength >= 4) {
+            currentEndExtn = view.getInt32(dataOffset, false);
+          }
           break;
         case RecordType.Layer:
           // Read layer number (2-byte integer)
