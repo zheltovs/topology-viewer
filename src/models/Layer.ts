@@ -7,6 +7,7 @@ export interface Layer {
   color: string;
   visible: boolean;
   gdsLayerNumber?: number; // Original GDS2 layer number if imported
+  gdsDataType?: number;    // Original GDS2 datatype (purpose) if imported
 }
 
 // Preset colors for layers
@@ -28,14 +29,20 @@ export const LAYER_COLORS = [
 /**
  * Creates a new layer with default settings
  */
-export function createLayer(name?: string, color?: string, gdsLayerNumber?: number): Layer {
+export function createLayer(
+  name?: string,
+  color?: string,
+  gdsLayerNumber?: number,
+  gdsDataType?: number
+): Layer {
   const id = `layer_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   return {
     id,
     name: name || `Layer ${id.slice(-4)}`,
     color: color || LAYER_COLORS[0],
     visible: true,
-    gdsLayerNumber
+    gdsLayerNumber,
+    gdsDataType
   };
 }
 

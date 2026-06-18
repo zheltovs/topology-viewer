@@ -95,7 +95,10 @@ export function GdsImportDialog({ layers, objectCounts, hasExistingContent, onCo
                 {objectCounts.get(layer.id) || 0} objects
               </span>
               {layer.gdsLayerNumber !== undefined && (
-                <span className="gds-layer-number">#{layer.gdsLayerNumber}</span>
+                <span className="gds-layer-number">
+                  #{layer.gdsLayerNumber}
+                  {layer.gdsDataType !== undefined ? `/${layer.gdsDataType}` : ''}
+                </span>
               )}
             </label>
           ))}

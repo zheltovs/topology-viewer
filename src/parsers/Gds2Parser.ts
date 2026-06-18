@@ -2,6 +2,7 @@ import { Point, Chain, Contour, createLayer, LAYER_COLORS } from '../models';
 import type { Shape, Layer } from '../models';
 import type { BinaryShapeParser } from './ShapeParser';
 import { strokePathToPoints } from './strokePath';
+import { readGdsReal8, readGdsString } from './gdsReal';
 
 const RecordType = {
   Header: 0x00,
@@ -56,7 +57,10 @@ const DataType = {
 } as const;
 
 const RECORD_HEADER_SIZE = 4;
-const COORDINATE_PAIR_SIZE = 8;
+/** A single GDSII XY record holds at most 200 coordinate pairs. */
+const MAX_XY_PAIRS = 200;
+/** Safety cap so a pathological hierarchy (huge AREF / deep recursion) cannot OOM the tab. */
+const MAX_FLATTENED_SHAPES = 2_000_000;
 
 export interface Gds2ParseResult {
   shapes: Shape[];
@@ -68,33 +72,457 @@ export interface Gds2LayerInfo {
   objectCounts: Map<string, number>; // layerId -> object count
 }
 
-/**
- * Builds the viewer shape for a parsed GDSII element. Boundaries become filled
- * contours; paths with a positive WIDTH are stroked into a filled ribbon
- * (Contour) honoring PATHTYPE/BGNEXTN/ENDEXTN, while zero-width paths keep their
- * open centerline (Chain) since GDSII permits widthless paths.
- */
-function buildElementShape(
-  type: 'boundary' | 'path',
-  points: Point[],
-  width: number,
-  pathType: number,
-  bgnExtn: number,
-  endExtn: number,
-  color: string,
-  layerId: string
-): Shape {
-  if (type === 'boundary') {
-    return new Contour(points, undefined, color, layerId);
-  }
-  if (width > 0) {
-    const ring = strokePathToPoints(points, width, pathType, bgnExtn, endExtn);
-    if (ring && ring.length >= 3) {
-      return new Contour(ring, undefined, color, layerId);
+type ElementKind = 'boundary' | 'path' | 'box';
+
+interface ParsedElement {
+  kind: ElementKind;
+  layer: number;
+  datatype: number;
+  points: Point[];
+  width: number;
+  pathType: number;
+  bgnExtn: number;
+  endExtn: number;
+}
+
+interface Placement {
+  aref: boolean;
+  cellName: string;
+  reflect: boolean;
+  mag: number;
+  angle: number; // degrees
+  cols: number;
+  rows: number;
+  origin: Point;
+  colPitch: Point; // per-column translation (AREF)
+  rowPitch: Point; // per-row translation (AREF)
+}
+
+class Structure {
+  name = '';
+  elements: ParsedElement[] = [];
+  placements: Placement[] = [];
+}
+
+interface LayerKey {
+  layer: number;
+  datatype: number;
+}
+
+interface Library {
+  structures: Map<string, Structure>;
+  structureOrder: string[];
+  /** Multiplication factor turning a raw DB coordinate into a user unit (from UNITS). */
+  dbToUser: number;
+  /** Distinct (layer, datatype) pairs in first-seen order. */
+  layerKeys: LayerKey[];
+}
+
+/** A flattened geometry record in DB units, before scaling/layering. */
+interface FlatShape {
+  kind: ElementKind;
+  layer: number;
+  datatype: number;
+  points: Point[];
+  width: number;
+  pathType: number;
+  bgnExtn: number;
+  endExtn: number;
+}
+
+/** 2D affine transform: x' = a*x + b*y + tx, y' = c*x + d*y + ty. */
+interface Xform {
+  a: number; b: number; c: number; d: number; tx: number; ty: number;
+}
+
+const IDENTITY: Xform = { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 };
+
+const applyXform = (p: Point, m: Xform): Point =>
+  new Point(m.a * p.x + m.b * p.y + m.tx, m.c * p.x + m.d * p.y + m.ty);
+
+/** Returns parent ∘ child (child applied first, then parent). */
+function composeXform(parent: Xform, child: Xform): Xform {
+  return {
+    a: parent.a * child.a + parent.b * child.c,
+    b: parent.a * child.b + parent.b * child.d,
+    c: parent.c * child.a + parent.d * child.c,
+    d: parent.c * child.b + parent.d * child.d,
+    tx: parent.a * child.tx + parent.b * child.ty + parent.tx,
+    ty: parent.c * child.tx + parent.d * child.ty + parent.ty,
+  };
+}
+
+/** Builds the affine matrix for an SREF/AREF placement (reflect → magnify → rotate → translate). */
+function placementMatrix(p: Placement): Xform {
+  const fr = p.reflect ? -1 : 1;
+  const m = p.mag;
+  const rad = (p.angle * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  // L = R · S · F  with F=[[1,0],[0,fr]], S=[[m,0],[0,m]], R=[[cos,-sin],[sin,cos]]
+  return {
+    a: cos * m,
+    b: -sin * m * fr,
+    c: sin * m,
+    d: cos * m * fr,
+    tx: p.origin.x,
+    ty: p.origin.y,
+  };
+}
+
+/** Reads an XY record's coordinate pairs, accepting both legal Int4 and Int2 encodings. */
+function readXy(view: DataView, offset: number, length: number, dataType: number): Point[] {
+  const pts: Point[] = [];
+  if (dataType === DataType.Int4) {
+    const pairs = Math.min(Math.floor(length / 8), MAX_XY_PAIRS);
+    for (let i = 0; i < pairs; i++) {
+      const base = offset + i * 8;
+      pts.push(new Point(view.getInt32(base, false), view.getInt32(base + 4, false)));
+    }
+  } else if (dataType === DataType.Int2) {
+    const pairs = Math.min(Math.floor(length / 4), MAX_XY_PAIRS);
+    for (let i = 0; i < pairs; i++) {
+      const base = offset + i * 4;
+      pts.push(new Point(view.getInt16(base, false), view.getInt16(base + 2, false)));
     }
   }
-  return new Chain(points, undefined, color, layerId);
+  return pts;
 }
+
+function minPointsFor(kind: ElementKind): number {
+  return kind === 'path' ? 2 : 3; // boundary/box are closed polygons (≥3 vertices)
+}
+
+/** Strokes/compiles a parsed element into its raw geometry points in DB units. */
+function buildElementPoints(el: ParsedElement): { type: 'contour' | 'chain'; points: Point[] } {
+  if (el.kind === 'path') {
+    if (el.width > 0) {
+      const ring = strokePathToPoints(el.points, el.width, el.pathType, el.bgnExtn, el.endExtn);
+      if (ring && ring.length >= 3) return { type: 'contour', points: ring };
+    }
+    return { type: 'chain', points: el.points };
+  }
+  // boundary / box → closed filled polygon
+  return { type: 'contour', points: el.points };
+}
+
+/**
+ * First pass: walk the stream once and collect every structure, its elements
+ * and placements, the UNITS conversion factor and the distinct layer/datatype keys.
+ */
+function collectLibrary(view: DataView): Library {
+  const structures = new Map<string, Structure>();
+  const structureOrder: string[] = [];
+  const layerKeyMap = new Map<string, LayerKey>();
+  let dbToUser = 1;
+
+  let current: Structure | null = null;
+
+  // element state
+  let elementKind: ElementKind | null = null;
+  let elLayer: number | null = null;
+  let elDatatype = 0;
+  let elWidth = 0;
+  let elPathType = 0;
+  let elBgnExtn = 0;
+  let elEndExtn = 0;
+  let elPoints: Point[] = [];
+
+  // placement state
+  let inPlacement = false;
+  let plAref = false;
+  let plCellName = '';
+  let plReflect = false;
+  let plMag = 1;
+  let plAngle = 0;
+  let plCols = 1;
+  let plRows = 1;
+  let plXY: Point[] = [];
+
+  const noteLayerKey = (layer: number, datatype: number) => {
+    const key = `${layer}:${datatype}`;
+    if (!layerKeyMap.has(key)) layerKeyMap.set(key, { layer, datatype });
+  };
+
+  const resetElement = () => {
+    elementKind = null;
+    elLayer = null;
+    elDatatype = 0;
+    elWidth = 0;
+    elPathType = 0;
+    elBgnExtn = 0;
+    elEndExtn = 0;
+    elPoints = [];
+  };
+
+  const resetPlacement = () => {
+    inPlacement = false;
+    plAref = false;
+    plCellName = '';
+    plReflect = false;
+    plMag = 1;
+    plAngle = 0;
+    plCols = 1;
+    plRows = 1;
+    plXY = [];
+  };
+
+  const finishElement = () => {
+    if (elementKind && current && elPoints.length >= minPointsFor(elementKind)) {
+      const layer = elLayer ?? 0;
+      current.elements.push({
+        kind: elementKind,
+        layer,
+        datatype: elDatatype,
+        points: elPoints,
+        width: elWidth,
+        pathType: elPathType,
+        bgnExtn: elBgnExtn,
+        endExtn: elEndExtn,
+      });
+      noteLayerKey(layer, elDatatype);
+    }
+    resetElement();
+  };
+
+  const finishPlacement = () => {
+    if (inPlacement && current && plCellName && plXY.length >= 1) {
+      const origin = plXY[0];
+      const placement: Placement = {
+        aref: plAref,
+        cellName: plCellName,
+        reflect: plReflect,
+        mag: plMag,
+        angle: plAngle,
+        cols: plCols,
+        rows: plRows,
+        origin,
+        colPitch: plAref && plXY.length >= 2 && plCols > 0
+          ? new Point((plXY[1].x - origin.x) / plCols, (plXY[1].y - origin.y) / plCols)
+          : new Point(0, 0),
+        rowPitch: plAref && plXY.length >= 3 && plRows > 0
+          ? new Point((plXY[2].x - origin.x) / plRows, (plXY[2].y - origin.y) / plRows)
+          : new Point(0, 0),
+      };
+      current.placements.push(placement);
+    }
+    resetPlacement();
+  };
+
+  // Validate the stream begins with a HEADER record.
+  if (view.byteLength >= RECORD_HEADER_SIZE) {
+    const firstType = view.getUint8(2);
+    if (firstType !== RecordType.Header) {
+      throw new Error('Not a GDSII stream: first record is not HEADER.');
+    }
+  }
+
+  let offset = 0;
+  while (offset + RECORD_HEADER_SIZE <= view.byteLength) {
+    const recordLength = view.getUint16(offset, false);
+    if (recordLength < RECORD_HEADER_SIZE) {
+      throw new Error(
+        `Invalid GDS2 record length: ${recordLength}. Expected at least ${RECORD_HEADER_SIZE} bytes.`
+      );
+    }
+    const recordType = view.getUint8(offset + 2);
+    const dataType = view.getUint8(offset + 3);
+    const dataOffset = offset + RECORD_HEADER_SIZE;
+    const dataLength = recordLength - RECORD_HEADER_SIZE;
+    if (dataOffset + dataLength > view.byteLength) {
+      throw new Error('Unexpected end of GDS2 data.');
+    }
+
+    switch (recordType) {
+      case RecordType.StrName:
+        finishElement();
+        finishPlacement();
+        current = new Structure();
+        current.name = readGdsString(view, dataOffset, dataLength);
+        structures.set(current.name, current);
+        structureOrder.push(current.name);
+        break;
+      case RecordType.EndStr:
+        finishElement();
+        finishPlacement();
+        current = null;
+        break;
+      case RecordType.Boundary:
+      case RecordType.Path:
+      case RecordType.Box:
+        finishPlacement();
+        finishElement();
+        elementKind = recordType === RecordType.Boundary ? 'boundary'
+          : recordType === RecordType.Path ? 'path' : 'box';
+        break;
+      case RecordType.Sref:
+      case RecordType.Aref:
+        finishElement();
+        finishPlacement();
+        inPlacement = true;
+        plAref = recordType === RecordType.Aref;
+        break;
+      case RecordType.Layer:
+        if (dataType === DataType.Int2 && dataLength >= 2) elLayer = view.getInt16(dataOffset, false);
+        break;
+      case RecordType.DataType:
+      case RecordType.BoxType:
+        if (dataType === DataType.Int2 && dataLength >= 2) elDatatype = view.getInt16(dataOffset, false);
+        break;
+      case RecordType.Width:
+        if (dataType === DataType.Int4 && dataLength >= 4) elWidth = view.getInt32(dataOffset, false);
+        break;
+      case RecordType.PathType:
+        if (dataType === DataType.Int2 && dataLength >= 2) elPathType = view.getInt16(dataOffset, false);
+        break;
+      case RecordType.BgnExtn:
+        if (dataType === DataType.Int4 && dataLength >= 4) elBgnExtn = view.getInt32(dataOffset, false);
+        break;
+      case RecordType.EndExtn:
+        if (dataType === DataType.Int4 && dataLength >= 4) elEndExtn = view.getInt32(dataOffset, false);
+        break;
+      case RecordType.SName:
+        if (dataType === DataType.String) plCellName = readGdsString(view, dataOffset, dataLength);
+        break;
+      case RecordType.Strans:
+        if (dataType === DataType.BitArray && dataLength >= 2) {
+          const bits = view.getUint16(dataOffset, false);
+          plReflect = (bits & 0x8000) !== 0; // bit 15 = reflect about X
+        }
+        break;
+      case RecordType.Mag:
+        if (dataType === DataType.Real8 && dataLength >= 8) plMag = readGdsReal8(view, dataOffset);
+        break;
+      case RecordType.Angle:
+        if (dataType === DataType.Real8 && dataLength >= 8) plAngle = readGdsReal8(view, dataOffset);
+        break;
+      case RecordType.ColRow:
+        if (dataType === DataType.Int2 && dataLength >= 4) {
+          plCols = view.getInt16(dataOffset, false);
+          plRows = view.getInt16(dataOffset + 2, false);
+          if (plCols < 1) plCols = 1;
+          if (plRows < 1) plRows = 1;
+        }
+        break;
+      case RecordType.Xy:
+        if (elementKind) {
+          elPoints = elPoints.concat(readXy(view, dataOffset, dataLength, dataType));
+        } else if (inPlacement) {
+          plXY = plXY.concat(readXy(view, dataOffset, dataLength, dataType));
+        }
+        break;
+      case RecordType.Units:
+        if (dataType === DataType.Real8 && dataLength >= 8) {
+          const userUnitsPerDb = readGdsReal8(view, dataOffset); // first real8
+          if (userUnitsPerDb > 0 && Number.isFinite(userUnitsPerDb)) dbToUser = userUnitsPerDb;
+        }
+        break;
+      case RecordType.Endel:
+        if (inPlacement) finishPlacement();
+        else finishElement();
+        break;
+      case RecordType.EndLib:
+        return {
+          structures, structureOrder, dbToUser,
+          layerKeys: Array.from(layerKeyMap.values()),
+        };
+      default:
+        break; // forward-compatible: ignore unknown records
+    }
+
+    offset += recordLength;
+  }
+
+  return {
+    structures, structureOrder, dbToUser,
+    layerKeys: Array.from(layerKeyMap.values()),
+  };
+}
+
+/**
+ * Second pass: flatten the hierarchy. Top cells are structures not referenced by
+ * any placement (the standard "top cell" definition); if every cell is referenced
+ * (or none) the last-defined structure is used as a fallback. Placements apply
+ * reflect → magnify → rotate → translate; AREF replicates cols × rows.
+ */
+function flattenLibrary(lib: Library): FlatShape[] {
+  const out: FlatShape[] = [];
+  if (lib.structureOrder.length === 0) return out;
+
+  const referenced = new Set<string>();
+  for (const s of lib.structures.values()) {
+    for (const p of s.placements) referenced.add(p.cellName);
+  }
+  const tops = lib.structureOrder.filter(name => !referenced.has(name));
+  const roots = tops.length > 0
+    ? tops
+    : [lib.structureOrder[lib.structureOrder.length - 1]];
+
+  let count = 0;
+  const visiting = new Set<string>();
+
+  const recurse = (name: string, xform: Xform) => {
+    if (count >= MAX_FLATTENED_SHAPES) return;
+    if (visiting.has(name)) return; // cycle guard
+    visiting.add(name);
+    const s = lib.structures.get(name);
+    if (s) {
+      for (const el of s.elements) {
+        if (count >= MAX_FLATTENED_SHAPES) break;
+        const built = buildElementPoints(el);
+        const tpts = built.points.map(p => applyXform(p, xform));
+        out.push({
+          kind: el.kind, layer: el.layer, datatype: el.datatype, points: tpts,
+          width: el.width, pathType: el.pathType, bgnExtn: el.bgnExtn, endExtn: el.endExtn,
+        });
+        count++;
+      }
+      for (const p of s.placements) {
+        if (count >= MAX_FLATTENED_SHAPES) break;
+        const linear = placementMatrix(p); // reflect/mag/angle, translation overridden per instance
+        if (p.aref) {
+          for (let i = 0; i < p.cols; i++) {
+            for (let j = 0; j < p.rows; j++) {
+              if (count >= MAX_FLATTENED_SHAPES) break;
+              const instanceXform = composeXform(xform, {
+                a: linear.a, b: linear.b, c: linear.c, d: linear.d,
+                tx: p.origin.x + i * p.colPitch.x + j * p.rowPitch.x,
+                ty: p.origin.y + i * p.colPitch.y + j * p.rowPitch.y,
+              });
+              recurse(p.cellName, instanceXform);
+            }
+          }
+        } else {
+          recurse(p.cellName, composeXform(xform, linear));
+        }
+      }
+    }
+    visiting.delete(name);
+  };
+
+  for (const root of roots) recurse(root, IDENTITY);
+  return out;
+}
+
+/**
+ * Builds a viewer Shape from a flattened record.
+ *
+ * Coordinates are intentionally kept in raw GDS database units — matching the
+ * reference viewer and the previous behavior — so the UNITS db→user factor is
+ * NOT applied here. (It is still parsed into `Library.dbToUser` as metadata;
+ * use the toolbar scale control if physical/user-unit display is desired.)
+ */
+function buildShape(flat: FlatShape, color: string, layerId: string): Shape {
+  // Paths with positive width were stroked into a closed polygon during flatten;
+  // zero-width paths keep their open centerline. Boundaries/boxes are closed.
+  const isContour = flat.kind !== 'path' || flat.width > 0;
+  return isContour
+    ? new Contour(flat.points, undefined, color, layerId)
+    : new Chain(flat.points, undefined, color, layerId);
+}
+
+const layerName = (layer: number, datatype: number) =>
+  datatype === 0 ? `Layer ${layer}` : `Layer ${layer} (type ${datatype})`;
 
 export class Gds2Parser implements BinaryShapeParser {
   parseShapes(input: ArrayBuffer): Shape[] {
@@ -102,384 +530,100 @@ export class Gds2Parser implements BinaryShapeParser {
   }
 
   /**
-   * Scans the GDS file to extract layer information and count objects per layer.
-   * This is useful for previewing available layers before full import.
+   * Scans the GDS file (collect + flatten) to extract layer information and count
+   * objects per (layer, datatype). Used for previewing layers before full import.
    */
   scanLayers(input: ArrayBuffer): Gds2LayerInfo {
     const view = new DataView(input);
-    const layerMap = new Map<number, Layer>();
-    const objectCountsByGdsLayer = new Map<number, number>();
-    let offset = 0;
-    let currentGdsLayer: number | null = null;
-    let inElement = false;
+    const lib = collectLibrary(view);
+    const flat = flattenLibrary(lib);
 
-    const getOrCreateLayer = (gdsLayerNum: number): Layer => {
-      if (!layerMap.has(gdsLayerNum)) {
-        const colorIndex = layerMap.size % LAYER_COLORS.length;
-        const layer = createLayer(
-          `Layer ${gdsLayerNum}`,
-          LAYER_COLORS[colorIndex],
-          gdsLayerNum
-        );
-        layerMap.set(gdsLayerNum, layer);
-        objectCountsByGdsLayer.set(gdsLayerNum, 0);
-      }
-      return layerMap.get(gdsLayerNum)!;
-    };
-
-    while (offset + RECORD_HEADER_SIZE <= view.byteLength) {
-      const recordLength = view.getUint16(offset, false);
-      if (recordLength < RECORD_HEADER_SIZE) {
-        throw new Error(
-          `Invalid GDS2 record length: ${recordLength}. Expected at least ${RECORD_HEADER_SIZE} bytes.`
-        );
-      }
-
-      const recordType = view.getUint8(offset + 2);
-      const dataType = view.getUint8(offset + 3);
-      const dataOffset = offset + RECORD_HEADER_SIZE;
-      const dataLength = recordLength - RECORD_HEADER_SIZE;
-
-      if (dataOffset + dataLength > view.byteLength) {
-        throw new Error('Unexpected end of GDS2 data.');
-      }
-
-      switch (recordType) {
-        case RecordType.Boundary:
-        case RecordType.Path:
-          inElement = true;
-          currentGdsLayer = null;
-          break;
-        case RecordType.Layer:
-          if (dataType === DataType.Int2 && dataLength >= 2) {
-            currentGdsLayer = view.getInt16(dataOffset, false);
-            getOrCreateLayer(currentGdsLayer);
-          }
-          break;
-        case RecordType.Endel:
-          if (inElement && currentGdsLayer !== null) {
-            const count = objectCountsByGdsLayer.get(currentGdsLayer) || 0;
-            objectCountsByGdsLayer.set(currentGdsLayer, count + 1);
-          }
-          inElement = false;
-          currentGdsLayer = null;
-          break;
-      }
-
-      offset += recordLength;
-    }
-
-    // Convert layer map to array, sorted by GDS layer number
-    const layers = Array.from(layerMap.entries())
-      .sort((a, b) => a[0] - b[0])
-      .map(([, layer]) => layer);
-
-    // Convert object counts to use layer IDs
+    const layers: Layer[] = [];
     const objectCounts = new Map<string, number>();
-    for (const layer of layers) {
-      if (layer.gdsLayerNumber !== undefined) {
-        const count = objectCountsByGdsLayer.get(layer.gdsLayerNumber) || 0;
-        objectCounts.set(layer.id, count);
-      }
+    const byKey = new Map<string, Layer>();
+    for (let i = 0; i < lib.layerKeys.length; i++) {
+      const { layer, datatype } = lib.layerKeys[i];
+      const layerObj = createLayer(
+        layerName(layer, datatype),
+        LAYER_COLORS[i % LAYER_COLORS.length],
+        layer,
+        datatype
+      );
+      layers.push(layerObj);
+      byKey.set(`${layer}:${datatype}`, layerObj);
+      objectCounts.set(layerObj.id, 0);
     }
-
+    for (const f of flat) {
+      const layerObj = byKey.get(`${f.layer}:${f.datatype}`);
+      if (layerObj) objectCounts.set(layerObj.id, (objectCounts.get(layerObj.id) || 0) + 1);
+    }
     return { layers, objectCounts };
   }
 
-  /**
-   * Parse GDS with filtering - only import shapes from specified layers
-   */
   parseWithLayerFilter(input: ArrayBuffer, allowedLayerIds: Set<string>, layerMap: Map<string, Layer>): Gds2ParseResult {
     const view = new DataView(input);
-    const shapes: Shape[] = [];
-    const usedLayers = new Map<string, Layer>();
-    let offset = 0;
-    let currentType: 'boundary' | 'path' | null = null;
-    let currentPoints: Point[] = [];
-    let currentGdsLayer: number | null = null;
-    let currentWidth = 0;
-    let currentPathType = 0;
-    let currentBgnExtn = 0;
-    let currentEndExtn = 0;
+    const lib = collectLibrary(view);
+    const flat = flattenLibrary(lib);
 
-    const finalizeElement = () => {
-      if (!currentType) return;
-
-      const minPoints = currentType === 'boundary' ? 3 : 2;
-      if (currentPoints.length >= minPoints) {
-        const gdsLayerNum = currentGdsLayer ?? 0;
-
-        // Find layer by GDS number
-        let layer: Layer | undefined;
-        for (const [id, l] of layerMap) {
-          if (l.gdsLayerNumber === gdsLayerNum && allowedLayerIds.has(id)) {
-            layer = l;
-            break;
-          }
-        }
-
-        // Only add shape if layer is allowed
-        if (layer) {
-          usedLayers.set(layer.id, layer);
-          const shape = buildElementShape(
-            currentType, currentPoints, currentWidth, currentPathType,
-            currentBgnExtn, currentEndExtn, layer.color, layer.id
-          );
-          shapes.push(shape);
-        }
-      }
-
-      currentType = null;
-      currentPoints = [];
-      currentGdsLayer = null;
-      currentWidth = 0;
-      currentPathType = 0;
-      currentBgnExtn = 0;
-      currentEndExtn = 0;
-    };
-
-    while (offset + RECORD_HEADER_SIZE <= view.byteLength) {
-      const recordLength = view.getUint16(offset, false);
-      if (recordLength < RECORD_HEADER_SIZE) {
-        throw new Error(
-          `Invalid GDS2 record length: ${recordLength}. Expected at least ${RECORD_HEADER_SIZE} bytes.`
-        );
-      }
-
-      const recordType = view.getUint8(offset + 2);
-      const dataType = view.getUint8(offset + 3);
-      const dataOffset = offset + RECORD_HEADER_SIZE;
-      const dataLength = recordLength - RECORD_HEADER_SIZE;
-
-      if (dataOffset + dataLength > view.byteLength) {
-        throw new Error('Unexpected end of GDS2 data.');
-      }
-
-      switch (recordType) {
-        case RecordType.Boundary:
-          finalizeElement();
-          currentType = 'boundary';
-          currentPoints = [];
-          currentGdsLayer = null;
-          currentWidth = 0;
-          currentPathType = 0;
-          currentBgnExtn = 0;
-          currentEndExtn = 0;
-          break;
-        case RecordType.Path:
-          finalizeElement();
-          currentType = 'path';
-          currentPoints = [];
-          currentGdsLayer = null;
-          currentWidth = 0;
-          currentPathType = 0;
-          currentBgnExtn = 0;
-          currentEndExtn = 0;
-          break;
-        case RecordType.Width:
-          if (dataType === DataType.Int4 && dataLength >= 4) {
-            currentWidth = view.getInt32(dataOffset, false);
-          }
-          break;
-        case RecordType.PathType:
-          if (dataType === DataType.Int2 && dataLength >= 2) {
-            currentPathType = view.getInt16(dataOffset, false);
-          }
-          break;
-        case RecordType.BgnExtn:
-          if (dataType === DataType.Int4 && dataLength >= 4) {
-            currentBgnExtn = view.getInt32(dataOffset, false);
-          }
-          break;
-        case RecordType.EndExtn:
-          if (dataType === DataType.Int4 && dataLength >= 4) {
-            currentEndExtn = view.getInt32(dataOffset, false);
-          }
-          break;
-        case RecordType.Layer:
-          if (dataType === DataType.Int2 && dataLength >= 2) {
-            currentGdsLayer = view.getInt16(dataOffset, false);
-          }
-          break;
-        case RecordType.Xy:
-          if (currentType && dataLength > 0) {
-            if (dataType !== DataType.Int4 || dataLength % COORDINATE_PAIR_SIZE !== 0) {
-              throw new Error(
-                `Unsupported XY record encoding. Expected Int4 data type and length divisible by ${COORDINATE_PAIR_SIZE}, got data type ${dataType} and length ${dataLength}.`
-              );
-            }
-            for (let i = 0; i < dataLength; i += COORDINATE_PAIR_SIZE) {
-              const x = view.getInt32(dataOffset + i, false);
-              const y = view.getInt32(dataOffset + i + 4, false);
-              currentPoints.push(new Point(x, y));
-            }
-          }
-          break;
-        case RecordType.Endel:
-          finalizeElement();
-          break;
-        default:
-          break;
-      }
-
-      offset += recordLength;
+    // Index the caller-provided layers by (layer, datatype) for matching.
+    const byKey = new Map<string, Layer>();
+    for (const l of layerMap.values()) {
+      byKey.set(`${l.gdsLayerNumber ?? 0}:${l.gdsDataType ?? 0}`, l);
     }
 
-    // Convert used layers to array, sorted by GDS layer number
-    const layers = Array.from(usedLayers.values())
-      .sort((a, b) => (a.gdsLayerNumber ?? 0) - (b.gdsLayerNumber ?? 0));
+    const shapes: Shape[] = [];
+    const usedLayers = new Map<string, Layer>();
+    for (const f of flat) {
+      const layer = byKey.get(`${f.layer}:${f.datatype}`);
+      if (!layer || !allowedLayerIds.has(layer.id)) continue;
+      usedLayers.set(layer.id, layer);
+      shapes.push(buildShape(f, layer.color, layer.id));
+    }
 
+    // Return layers in stream-discovery order (consistent with scanLayers).
+    const layers: Layer[] = [];
+    for (const k of lib.layerKeys) {
+      const l = byKey.get(`${k.layer}:${k.datatype}`);
+      if (l && usedLayers.has(l.id)) layers.push(l);
+    }
     return { shapes, layers };
   }
 
   parseWithLayers(input: ArrayBuffer): Gds2ParseResult {
     const view = new DataView(input);
+    const lib = collectLibrary(view);
+    const flat = flattenLibrary(lib);
+
+    const layerCache = new Map<string, Layer>();
+    const getOrCreateLayer = (layer: number, datatype: number): Layer => {
+      const key = `${layer}:${datatype}`;
+      let l = layerCache.get(key);
+      if (!l) {
+        const idx = lib.layerKeys.findIndex(k => k.layer === layer && k.datatype === datatype);
+        const colorIdx = idx < 0 ? layerCache.size : idx;
+        l = createLayer(
+          layerName(layer, datatype),
+          LAYER_COLORS[colorIdx % LAYER_COLORS.length],
+          layer,
+          datatype
+        );
+        layerCache.set(key, l);
+      }
+      return l;
+    };
+
     const shapes: Shape[] = [];
-    const layerMap = new Map<number, Layer>(); // GDS layer number -> Layer
-    let offset = 0;
-    let currentType: 'boundary' | 'path' | null = null;
-    let currentPoints: Point[] = [];
-    let currentGdsLayer: number | null = null;
-    let currentWidth = 0;
-    let currentPathType = 0;
-    let currentBgnExtn = 0;
-    let currentEndExtn = 0;
-
-    const getOrCreateLayer = (gdsLayerNum: number): Layer => {
-      if (!layerMap.has(gdsLayerNum)) {
-        const colorIndex = layerMap.size % LAYER_COLORS.length;
-        const layer = createLayer(
-          `Layer ${gdsLayerNum}`,
-          LAYER_COLORS[colorIndex],
-          gdsLayerNum
-        );
-        layerMap.set(gdsLayerNum, layer);
-      }
-      return layerMap.get(gdsLayerNum)!;
-    };
-
-    const finalizeElement = () => {
-      if (!currentType) return;
-
-      const minPoints = currentType === 'boundary' ? 3 : 2;
-      if (currentPoints.length >= minPoints) {
-        // Get or create layer for this GDS layer number
-        const gdsLayerNum = currentGdsLayer ?? 0;
-        const layer = getOrCreateLayer(gdsLayerNum);
-
-        const shape = buildElementShape(
-          currentType, currentPoints, currentWidth, currentPathType,
-          currentBgnExtn, currentEndExtn, layer.color, layer.id
-        );
-        shapes.push(shape);
-      }
-
-      currentType = null;
-      currentPoints = [];
-      currentGdsLayer = null;
-      currentWidth = 0;
-      currentPathType = 0;
-      currentBgnExtn = 0;
-      currentEndExtn = 0;
-    };
-
-    while (offset + RECORD_HEADER_SIZE <= view.byteLength) {
-      const recordLength = view.getUint16(offset, false);
-      if (recordLength < RECORD_HEADER_SIZE) {
-        throw new Error(
-          `Invalid GDS2 record length: ${recordLength}. Expected at least ${RECORD_HEADER_SIZE} bytes.`
-        );
-      }
-
-      const recordType = view.getUint8(offset + 2);
-      const dataType = view.getUint8(offset + 3);
-      const dataOffset = offset + RECORD_HEADER_SIZE;
-      const dataLength = recordLength - RECORD_HEADER_SIZE;
-
-      if (dataOffset + dataLength > view.byteLength) {
-        throw new Error('Unexpected end of GDS2 data.');
-      }
-
-      switch (recordType) {
-        case RecordType.Boundary:
-          finalizeElement();
-          currentType = 'boundary';
-          currentPoints = [];
-          currentGdsLayer = null;
-          currentWidth = 0;
-          currentPathType = 0;
-          currentBgnExtn = 0;
-          currentEndExtn = 0;
-          break;
-        case RecordType.Path:
-          finalizeElement();
-          currentType = 'path';
-          currentPoints = [];
-          currentGdsLayer = null;
-          currentWidth = 0;
-          currentPathType = 0;
-          currentBgnExtn = 0;
-          currentEndExtn = 0;
-          break;
-        case RecordType.Width:
-          if (dataType === DataType.Int4 && dataLength >= 4) {
-            currentWidth = view.getInt32(dataOffset, false);
-          }
-          break;
-        case RecordType.PathType:
-          if (dataType === DataType.Int2 && dataLength >= 2) {
-            currentPathType = view.getInt16(dataOffset, false);
-          }
-          break;
-        case RecordType.BgnExtn:
-          if (dataType === DataType.Int4 && dataLength >= 4) {
-            currentBgnExtn = view.getInt32(dataOffset, false);
-          }
-          break;
-        case RecordType.EndExtn:
-          if (dataType === DataType.Int4 && dataLength >= 4) {
-            currentEndExtn = view.getInt32(dataOffset, false);
-          }
-          break;
-        case RecordType.Layer:
-          // Read layer number (2-byte integer)
-          if (dataType === DataType.Int2 && dataLength >= 2) {
-            currentGdsLayer = view.getInt16(dataOffset, false);
-          }
-          break;
-        case RecordType.Xy:
-          if (currentType && dataLength > 0) {
-            if (dataType !== DataType.Int4 || dataLength % COORDINATE_PAIR_SIZE !== 0) {
-              throw new Error(
-                `Unsupported XY record encoding. Expected Int4 data type and length divisible by ${COORDINATE_PAIR_SIZE}, got data type ${dataType} and length ${dataLength}.`
-              );
-            }
-            for (let i = 0; i < dataLength; i += COORDINATE_PAIR_SIZE) {
-              const x = view.getInt32(dataOffset + i, false);
-              const y = view.getInt32(dataOffset + i + 4, false);
-              currentPoints.push(new Point(x, y));
-            }
-          }
-          break;
-        case RecordType.Endel:
-          finalizeElement();
-          break;
-        default:
-          break;
-      }
-
-      offset += recordLength;
+    for (const f of flat) {
+      const layer = getOrCreateLayer(f.layer, f.datatype);
+      shapes.push(buildShape(f, layer.color, layer.id));
     }
 
-    if (offset !== view.byteLength) {
-      throw new Error(`Unexpected trailing bytes in GDS2 data. Expected ${view.byteLength} bytes but processed ${offset} bytes.`);
+    // Return layers in stream-discovery order (consistent with scanLayers).
+    const layers: Layer[] = [];
+    for (const k of lib.layerKeys) {
+      const l = layerCache.get(`${k.layer}:${k.datatype}`);
+      if (l) layers.push(l);
     }
-
-    // Convert layer map to array, sorted by GDS layer number
-    const layers = Array.from(layerMap.entries())
-      .sort((a, b) => a[0] - b[0])
-      .map(([, layer]) => layer);
-
     return { shapes, layers };
   }
 }
