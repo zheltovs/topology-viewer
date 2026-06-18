@@ -1,15 +1,19 @@
 import { useState, useEffect } from 'react';
 import type { Layer } from '../models';
+import type { GdsUnits } from '../parsers';
+import { describeGdsUnits } from '../parsers/gdsUnits';
 
 interface GdsImportDialogProps {
   layers: Layer[];
   objectCounts: Map<string, number>;
   hasExistingContent: boolean;
+  units?: GdsUnits;
   onConfirm: (selectedLayerIds: string[], clearCanvas: boolean) => void;
   onCancel: () => void;
 }
 
-export function GdsImportDialog({ layers, objectCounts, hasExistingContent, onConfirm, onCancel }: GdsImportDialogProps) {
+export function GdsImportDialog({ layers, objectCounts, hasExistingContent, units, onConfirm, onCancel }: GdsImportDialogProps) {
+  const unitsDisplay = describeGdsUnits(units);
   const [selectedLayerIds, setSelectedLayerIds] = useState<Set<string>>(
     new Set(layers.map(l => l.id))
   );
@@ -53,6 +57,11 @@ export function GdsImportDialog({ layers, objectCounts, hasExistingContent, onCo
         <div className="gds-import-header">
           <h2>Import GDS</h2>
           <p className="gds-import-subtitle">Select layers to import</p>
+          {unitsDisplay && (
+            <p className="gds-import-units" title="Parsed from the GDSII UNITS record">
+              {unitsDisplay.full}
+            </p>
+          )}
         </div>
 
         <div className="gds-import-toolbar">

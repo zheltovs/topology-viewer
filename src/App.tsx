@@ -5,6 +5,7 @@ import type { Shape, Layer } from './models';
 import { CommandHistory, AddShapeCommand, RemoveShapeCommand } from './services';
 import { useKeyboardShortcuts } from './hooks/useKeyboard';
 import { ParserRegistry, Gds2Parser } from './parsers';
+import type { GdsUnits } from './parsers';
 import './App.css';
 
 export interface GridSettings {
@@ -21,6 +22,7 @@ interface GdsImportState {
   layers: Layer[];
   objectCounts: Map<string, number>;
   fileBuffer: ArrayBuffer | null;
+  units?: GdsUnits;
 }
 
 function App() {
@@ -53,6 +55,7 @@ function App() {
     objectCounts: new Map(),
     fileBuffer: null
   });
+  const [units, setUnits] = useState<GdsUnits | undefined>(undefined);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
   const parserRegistry = new ParserRegistry();
@@ -191,7 +194,8 @@ function App() {
           isOpen: true,
           layers: layerInfo.layers,
           objectCounts: layerInfo.objectCounts,
-          fileBuffer: buffer
+          fileBuffer: buffer,
+          units: layerInfo.units
         });
       } else {
         // For other files, import directly
@@ -227,6 +231,7 @@ function App() {
           commandHistory.clear();
           setShapes(newShapes);
           setLayers([]);
+          setUnits(undefined);
           setSelectedShapeIds([]);
           updateHistoryState();
         }
@@ -306,6 +311,7 @@ function App() {
       );
 
       if (result.shapes.length > 0) {
+        setUnits(result.units);
         if (clearCanvas) {
           commandHistory.clear();
           setShapes(result.shapes);
@@ -464,6 +470,7 @@ function App() {
         onApplyScale={handleApplyScale}
         gridSettings={gridSettings}
         onGridSettingsChange={setGridSettings}
+        units={units}
       />
 
       <div className="workspace">
@@ -521,6 +528,7 @@ function App() {
           layers={gdsImportState.layers}
           objectCounts={gdsImportState.objectCounts}
           hasExistingContent={shapes.length > 0 || layers.length > 0}
+          units={gdsImportState.units}
           onConfirm={handleGdsImportConfirm}
           onCancel={handleGdsImportCancel}
         />
