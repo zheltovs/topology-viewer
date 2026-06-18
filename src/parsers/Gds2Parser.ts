@@ -62,14 +62,27 @@ const MAX_XY_PAIRS = 200;
 /** Safety cap so a pathological hierarchy (huge AREF / deep recursion) cannot OOM the tab. */
 const MAX_FLATTENED_SHAPES = 2_000_000;
 
+/**
+ * Physical-unit metadata parsed from the GDSII UNITS record.
+ *   dbToUser    = size of one database unit, expressed in user units (first REAL8).
+ *   metersPerDb = size of one database unit, expressed in meters (second REAL8).
+ * Both default to 1 when the file has no UNITS record.
+ */
+export interface GdsUnits {
+  dbToUser: number;
+  metersPerDb: number;
+}
+
 export interface Gds2ParseResult {
   shapes: Shape[];
   layers: Layer[];
+  units?: GdsUnits;
 }
 
 export interface Gds2LayerInfo {
   layers: Layer[];
   objectCounts: Map<string, number>; // layerId -> object count
+  units?: GdsUnits;
 }
 
 type ElementKind = 'boundary' | 'path' | 'box';
@@ -112,8 +125,10 @@ interface LayerKey {
 interface Library {
   structures: Map<string, Structure>;
   structureOrder: string[];
-  /** Multiplication factor turning a raw DB coordinate into a user unit (from UNITS). */
+  /** Size of one database unit in user units (UNITS first REAL8). */
   dbToUser: number;
+  /** Size of one database unit in meters (UNITS second REAL8). */
+  metersPerDb: number;
   /** Distinct (layer, datatype) pairs in first-seen order. */
   layerKeys: LayerKey[];
 }
@@ -215,6 +230,7 @@ function collectLibrary(view: DataView): Library {
   const structureOrder: string[] = [];
   const layerKeyMap = new Map<string, LayerKey>();
   let dbToUser = 1;
+  let metersPerDb = 1;
 
   let current: Structure | null = null;
 
@@ -415,6 +431,10 @@ function collectLibrary(view: DataView): Library {
         if (dataType === DataType.Real8 && dataLength >= 8) {
           const userUnitsPerDb = readGdsReal8(view, dataOffset); // first real8
           if (userUnitsPerDb > 0 && Number.isFinite(userUnitsPerDb)) dbToUser = userUnitsPerDb;
+          if (dataLength >= 16) {
+            const mPerDb = readGdsReal8(view, dataOffset + 8); // second real8
+            if (mPerDb > 0 && Number.isFinite(mPerDb)) metersPerDb = mPerDb;
+          }
         }
         break;
       case RecordType.Endel:
@@ -423,7 +443,7 @@ function collectLibrary(view: DataView): Library {
         break;
       case RecordType.EndLib:
         return {
-          structures, structureOrder, dbToUser,
+          structures, structureOrder, dbToUser, metersPerDb,
           layerKeys: Array.from(layerKeyMap.values()),
         };
       default:
@@ -434,7 +454,7 @@ function collectLibrary(view: DataView): Library {
   }
 
   return {
-    structures, structureOrder, dbToUser,
+    structures, structureOrder, dbToUser, metersPerDb,
     layerKeys: Array.from(layerKeyMap.values()),
   };
 }
@@ -557,7 +577,7 @@ export class Gds2Parser implements BinaryShapeParser {
       const layerObj = byKey.get(`${f.layer}:${f.datatype}`);
       if (layerObj) objectCounts.set(layerObj.id, (objectCounts.get(layerObj.id) || 0) + 1);
     }
-    return { layers, objectCounts };
+    return { layers, objectCounts, units: { dbToUser: lib.dbToUser, metersPerDb: lib.metersPerDb } };
   }
 
   parseWithLayerFilter(input: ArrayBuffer, allowedLayerIds: Set<string>, layerMap: Map<string, Layer>): Gds2ParseResult {
@@ -586,7 +606,7 @@ export class Gds2Parser implements BinaryShapeParser {
       const l = byKey.get(`${k.layer}:${k.datatype}`);
       if (l && usedLayers.has(l.id)) layers.push(l);
     }
-    return { shapes, layers };
+    return { shapes, layers, units: { dbToUser: lib.dbToUser, metersPerDb: lib.metersPerDb } };
   }
 
   parseWithLayers(input: ArrayBuffer): Gds2ParseResult {
@@ -624,6 +644,6 @@ export class Gds2Parser implements BinaryShapeParser {
       const l = layerCache.get(`${k.layer}:${k.datatype}`);
       if (l) layers.push(l);
     }
-    return { shapes, layers };
+    return { shapes, layers, units: { dbToUser: lib.dbToUser, metersPerDb: lib.metersPerDb } };
   }
 }

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { tokens } from '../styles';
 import type { GridSettings } from '../App';
+import type { GdsUnits } from '../parsers';
+import { describeGdsUnits } from '../parsers/gdsUnits';
 
 interface ToolbarProps {
   drawingMode: 'chain' | 'contour' | null;
@@ -18,6 +20,7 @@ interface ToolbarProps {
   onApplyScale: (divisor: number) => void;
   gridSettings: GridSettings;
   onGridSettingsChange: (s: GridSettings) => void;
+  units?: GdsUnits;
 }
 
 // Icon components for clean, modern look
@@ -94,8 +97,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onApplyScale,
   gridSettings,
   onGridSettingsChange,
+  units,
 }) => {
   const [scaleInput, setScaleInput] = useState(String(scaleFactor));
+  const unitsDisplay = describeGdsUnits(units);
 
   // Local string state for grid inputs
   const [gwX, setGwX] = useState(String(gridSettings.windowX));
@@ -321,6 +326,14 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
       {/* Status / Hints */}
       <div style={styles.statusArea}>
+        {unitsDisplay && (
+          <div
+            style={styles.unitsBadge}
+            title={`GDSII UNITS — ${unitsDisplay.full}\nCoordinates are displayed in raw DB units.`}
+          >
+            {unitsDisplay.short}
+          </div>
+        )}
         {drawingMode && (
           <div style={styles.hint}>
             <div style={styles.hintDot} />
@@ -438,6 +451,17 @@ const styles: { [key: string]: React.CSSProperties } = {
     marginLeft: 'auto',
     display: 'flex',
     alignItems: 'center',
+    gap: tokens.spacing.sm,
+  },
+  unitsBadge: {
+    padding: `${tokens.spacing.sm} ${tokens.spacing.md}`,
+    backgroundColor: tokens.colors.bg.tertiary,
+    border: `1px solid ${tokens.colors.border.subtle}`,
+    borderRadius: tokens.radius.md,
+    fontSize: tokens.typography.fontSize.sm,
+    fontFamily: tokens.typography.fontFamily.mono,
+    color: tokens.colors.text.secondary,
+    whiteSpace: 'nowrap' as const,
   },
   hint: {
     display: 'flex',
