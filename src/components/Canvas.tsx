@@ -62,6 +62,9 @@ const layerStyle: React.CSSProperties = {
   height: '100%',
 };
 
+// Size of the pre-rendered intersection point marker sprite (CSS px)
+const INTERSECTION_SPRITE_SIZE = 32;
+
 export const Canvas: React.FC<CanvasProps> = ({
   shapes,
   onAddPoint,
@@ -85,7 +88,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   });
   const [size, setSize] = useState<CanvasSize>({ width: 0, height: 0, dpr: 1 });
   const [isPanning, setIsPanning] = useState(false);
-  const [lastMousePos, setLastMousePos] = useState<{ x: number; y: number } | null>(null);
+  const lastMousePosRef = useRef<{ x: number; y: number } | null>(null);
   const [mouseWorldPos, setMouseWorldPos] = useState<Point | null>(null);
   const [intersections, setIntersections] = useState<IntersectionResult[]>([]);
 
@@ -511,57 +514,97 @@ export const Canvas: React.FC<CanvasProps> = ({
     });
   }, [worldToScreen, mouseWorldPos]);
 
+  // Pre-rendered intersection point marker (glow + dot + highlight).
+  // Stamping it with drawImage is far cheaper than per-point arc fills with
+  // shadowBlur, which matters with thousands of intersections on screen.
+  const intersectionSprite = React.useMemo(() => {
+    const sprite = document.createElement('canvas');
+    sprite.width = INTERSECTION_SPRITE_SIZE * size.dpr;
+    sprite.height = INTERSECTION_SPRITE_SIZE * size.dpr;
+    const ctx = sprite.getContext('2d');
+    if (!ctx) return null;
+    ctx.scale(size.dpr, size.dpr);
+    const c = INTERSECTION_SPRITE_SIZE / 2;
+
+    // Outer glow
+    ctx.fillStyle = canvasColors.intersectionFill;
+    ctx.beginPath();
+    ctx.arc(c, c, 12, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Main point - bright red
+    ctx.fillStyle = canvasColors.intersection;
+    ctx.shadowColor = canvasColors.intersection;
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.arc(c, c, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Inner highlight
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(c, c, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    return sprite;
+  }, [size.dpr]);
+
   const drawIntersections = useCallback((ctx: CanvasRenderingContext2D) => {
-    intersections.forEach((intersection: IntersectionResult) => {
-      if (intersection.type === IntersectionType.POINT && intersection.point) {
-        const screenPos = worldToScreen(intersection.point.x, intersection.point.y);
+    const margin = 20;
+    const maxX = size.width + margin;
+    const maxY = size.height + margin;
+    const half = INTERSECTION_SPRITE_SIZE / 2;
 
-        // Outer glow
-        ctx.fillStyle = canvasColors.intersectionFill;
-        ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, 12, 0, Math.PI * 2);
-        ctx.fill();
+    // Overlap segments: batched into two strokes (glow + main)
+    let hasOverlaps = false;
+    ctx.beginPath();
+    for (const intersection of intersections) {
+      if (intersection.type !== IntersectionType.OVERLAP || !intersection.segment) continue;
 
-        // Main point - bright red
-        ctx.fillStyle = canvasColors.intersection;
-        ctx.shadowColor = canvasColors.intersection;
-        ctx.shadowBlur = 8;
-        ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, 6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
+      const p1 = worldToScreen(intersection.segment.p1.x, intersection.segment.p1.y);
+      const p2 = worldToScreen(intersection.segment.p2.x, intersection.segment.p2.y);
 
-        // Inner highlight
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, 2, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (intersection.type === IntersectionType.OVERLAP && intersection.segment) {
-        const p1Screen = worldToScreen(intersection.segment.p1.x, intersection.segment.p1.y);
-        const p2Screen = worldToScreen(intersection.segment.p2.x, intersection.segment.p2.y);
-
-        // Glow for overlapping segment
-        ctx.strokeStyle = canvasColors.intersectionGlow;
-        ctx.lineWidth = 8;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(p1Screen.x, p1Screen.y);
-        ctx.lineTo(p2Screen.x, p2Screen.y);
-        ctx.stroke();
-
-        // Main overlapping segment - bright red
-        ctx.strokeStyle = canvasColors.intersection;
-        ctx.lineWidth = 4;
-        ctx.shadowColor = canvasColors.intersection;
-        ctx.shadowBlur = 6;
-        ctx.beginPath();
-        ctx.moveTo(p1Screen.x, p1Screen.y);
-        ctx.lineTo(p2Screen.x, p2Screen.y);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
+      // Skip segments entirely outside the viewport
+      if ((p1.x < -margin && p2.x < -margin) || (p1.x > maxX && p2.x > maxX) ||
+          (p1.y < -margin && p2.y < -margin) || (p1.y > maxY && p2.y > maxY)) {
+        continue;
       }
-    });
-  }, [worldToScreen, intersections]);
+
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      hasOverlaps = true;
+    }
+    if (hasOverlaps) {
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = canvasColors.intersectionGlow;
+      ctx.lineWidth = 8;
+      ctx.stroke();
+      ctx.strokeStyle = canvasColors.intersection;
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    }
+
+    // Point markers: sprite stamps, culled to the viewport
+    if (!intersectionSprite) return;
+    for (const intersection of intersections) {
+      if (intersection.type !== IntersectionType.POINT || !intersection.point) continue;
+
+      const screenPos = worldToScreen(intersection.point.x, intersection.point.y);
+      if (screenPos.x < -margin || screenPos.x > maxX ||
+          screenPos.y < -margin || screenPos.y > maxY) {
+        continue;
+      }
+
+      ctx.drawImage(
+        intersectionSprite,
+        screenPos.x - half,
+        screenPos.y - half,
+        INTERSECTION_SPRITE_SIZE,
+        INTERSECTION_SPRITE_SIZE
+      );
+    }
+  }, [worldToScreen, intersections, intersectionSprite, size]);
 
   const drawCursor = useCallback((ctx: CanvasRenderingContext2D, worldPos: Point) => {
     const screenPos = worldToScreen(worldPos.x, worldPos.y);
@@ -655,14 +698,18 @@ export const Canvas: React.FC<CanvasProps> = ({
     const mouseX = e.clientX;
     const mouseY = e.clientY;
 
-    // Update world position
-    const worldPos = screenToWorld(mouseX, mouseY);
-    setMouseWorldPos(worldPos);
+    // World position is only needed by drawing-mode overlays (crosshair and
+    // rubber-band line); tracking it outside drawing mode would redraw the
+    // overlay on every mouse move
+    if (drawingMode) {
+      setMouseWorldPos(screenToWorld(mouseX, mouseY));
+    }
 
     // Handle panning
-    if (isPanning && lastMousePos) {
-      const dx = mouseX - lastMousePos.x;
-      const dy = mouseY - lastMousePos.y;
+    const last = lastMousePosRef.current;
+    if (isPanning && last) {
+      const dx = mouseX - last.x;
+      const dy = mouseY - last.y;
 
       setTransform(prev => ({
         ...prev,
@@ -671,8 +718,15 @@ export const Canvas: React.FC<CanvasProps> = ({
       }));
     }
 
-    setLastMousePos({ x: mouseX, y: mouseY });
-  }, [isPanning, lastMousePos, screenToWorld]);
+    lastMousePosRef.current = { x: mouseX, y: mouseY };
+  }, [isPanning, drawingMode, screenToWorld]);
+
+  // Drop the stale cursor position when leaving drawing mode
+  useEffect(() => {
+    if (!drawingMode) {
+      setMouseWorldPos(null);
+    }
+  }, [drawingMode]);
 
   // Handle mouse down
   const handleMouseDown = useCallback((e: MouseEvent) => {
