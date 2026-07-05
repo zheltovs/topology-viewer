@@ -899,7 +899,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (showIntersections) {
         onIntersectionComputingChange?.(true);
         try {
-          const intersections = await IntersectionDetector.findAllIntersectionsSimple(shapes);
+          const intersections = await IntersectionDetector.findAllIntersections(shapes);
           if (!isCancelled) {
             setIntersections(intersections);
           }

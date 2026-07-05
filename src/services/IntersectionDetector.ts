@@ -1,5 +1,7 @@
 import { Point, Segment } from '../models';
 import type { Shape } from '../models';
+import { intersectSegments } from './segmentIntersections';
+import type { RawIntersectionResult } from './segmentIntersections';
 
 /**
  * Types of intersections that can be detected
@@ -25,43 +27,28 @@ export interface IntersectionResult {
 }
 
 /**
- * Worker result interface
+ * Worker response interface
  */
 interface WorkerResult {
+  requestId: number;
   success: boolean;
-  results?: Array<{
-    type: 'point' | 'overlap';
-    point?: { x: number; y: number };
-    segment?: { p1: { x: number; y: number }; p2: { x: number; y: number } };
-    shape1: string;
-    shape2: string;
-    segment1Index: number;
-    segment2Index: number;
-  }>;
+  results?: RawIntersectionResult[];
   error?: string;
 }
 
 /**
- * Intermediate result type from worker (before shape reference filling)
- */
-interface WorkerIntersectionResult {
-  type: 'point' | 'overlap';
-  point?: { x: number; y: number };
-  segment?: { p1: { x: number; y: number }; p2: { x: number; y: number } };
-  shape1: string;
-  shape2: string;
-  segment1Index: number;
-  segment2Index: number;
-}
-
-/**
- * Intersection detector for finding intersections between shapes
- * Uses a web worker to avoid blocking the main thread
+ * Intersection detector for finding intersections between shapes.
+ * The search itself (sweep-and-prune, see services/segmentIntersections.ts)
+ * runs in a web worker to avoid blocking the main thread.
  */
 export class IntersectionDetector {
-  private static EPSILON = 1e-9;
   private static worker: Worker | null = null;
-  private static pendingRequest: { resolve: (results: WorkerIntersectionResult[]) => void; reject: (error: Error) => void } | null = null;
+  private static requestCounter = 0;
+  private static pendingRequest: {
+    requestId: number;
+    resolve: (results: RawIntersectionResult[]) => void;
+    reject: (error: Error) => void;
+  } | null = null;
 
   /**
    * Initialize the web worker
@@ -74,26 +61,17 @@ export class IntersectionDetector {
       );
 
       this.worker.onmessage = (e: MessageEvent<WorkerResult>) => {
-        if (this.pendingRequest) {
-          const { resolve, reject } = this.pendingRequest;
-          this.pendingRequest = null;
+        const pending = this.pendingRequest;
+        // Ignore responses of superseded requests: the worker processes
+        // messages sequentially, so an answer to a cancelled computation can
+        // arrive while a newer request is already pending
+        if (!pending || e.data.requestId !== pending.requestId) return;
+        this.pendingRequest = null;
 
-          if (e.data.success && e.data.results) {
-            // Convert worker results to IntersectionResult format
-            const results: WorkerIntersectionResult[] = e.data.results.map(r => ({
-              type: r.type,
-              point: r.point,
-              segment: r.segment,
-              shape1: r.shape1,
-              shape2: r.shape2,
-              segment1Index: r.segment1Index,
-              segment2Index: r.segment2Index
-            }));
-
-            resolve(results);
-          } else {
-            reject(new Error(e.data.error || 'Unknown error in worker'));
-          }
+        if (e.data.success && e.data.results) {
+          pending.resolve(e.data.results);
+        } else {
+          pending.reject(new Error(e.data.error || 'Unknown error in worker'));
         }
       };
 
@@ -121,11 +99,10 @@ export class IntersectionDetector {
   }
 
   /**
-   * Alternative method: Find intersections with bounding box pre-filtering
-   * This is a simpler O(n²) approach with early rejection
-   * Now runs in a web worker to avoid blocking the main thread
+   * Find all intersections and overlaps between the given shapes.
+   * Runs in a web worker to avoid blocking the main thread.
    */
-  static async findAllIntersectionsSimple(shapes: Shape[]): Promise<IntersectionResult[]> {
+  static async findAllIntersections(shapes: Shape[]): Promise<IntersectionResult[]> {
     // Convert shapes to worker format
     const workerShapes = shapes.map(shape => ({
       id: shape.id,
@@ -139,27 +116,33 @@ export class IntersectionDetector {
         this.pendingRequest.reject(new Error('Previous intersection detection request was cancelled'));
       }
 
-      this.pendingRequest = { resolve: (results: WorkerIntersectionResult[]) => {
-        // Fill in shape references and convert to proper types
-        const shapeMap = new Map(shapes.map(s => [s.id, s]));
-        const finalResults: IntersectionResult[] = results.map((r) => ({
-          type: r.type === 'point' ? IntersectionType.POINT : IntersectionType.OVERLAP,
-          point: r.point ? new Point(r.point.x, r.point.y) : undefined,
-          segment: r.segment ? new Segment(
-            new Point(r.segment.p1.x, r.segment.p1.y),
-            new Point(r.segment.p2.x, r.segment.p2.y)
-          ) : undefined,
-          shape1: shapeMap.get(r.shape1)!,
-          shape2: shapeMap.get(r.shape2)!,
-          segment1Index: r.segment1Index,
-          segment2Index: r.segment2Index
-        })).filter((r) => r.shape1 && r.shape2);
+      const requestId = ++this.requestCounter;
 
-        resolve(finalResults);
-      }, reject };
+      this.pendingRequest = {
+        requestId,
+        resolve: (results: RawIntersectionResult[]) => {
+          // Fill in shape references and convert to proper types
+          const shapeMap = new Map(shapes.map(s => [s.id, s]));
+          const finalResults: IntersectionResult[] = results.map((r) => ({
+            type: r.type === 'point' ? IntersectionType.POINT : IntersectionType.OVERLAP,
+            point: r.point ? new Point(r.point.x, r.point.y) : undefined,
+            segment: r.segment ? new Segment(
+              new Point(r.segment.p1.x, r.segment.p1.y),
+              new Point(r.segment.p2.x, r.segment.p2.y)
+            ) : undefined,
+            shape1: shapeMap.get(r.shape1)!,
+            shape2: shapeMap.get(r.shape2)!,
+            segment1Index: r.segment1Index,
+            segment2Index: r.segment2Index
+          })).filter((r) => r.shape1 && r.shape2);
+
+          resolve(finalResults);
+        },
+        reject
+      };
 
       const worker = this.getWorker();
-      worker.postMessage({ shapes: workerShapes });
+      worker.postMessage({ requestId, shapes: workerShapes });
     });
   }
 
@@ -168,42 +151,15 @@ export class IntersectionDetector {
    * Returns either a point (IntersectionType.POINT) or a segment (IntersectionType.OVERLAP)
    */
   static findIntersection(seg1: Segment, seg2: Segment): Point | Segment | null {
-    // First check for overlapping segments
-    const overlap = seg1.getOverlap(seg2);
-    if (overlap && overlap.length() > this.EPSILON) {
-      return overlap;
+    const hit = intersectSegments(
+      seg1.p1.x, seg1.p1.y, seg1.p2.x, seg1.p2.y,
+      seg2.p1.x, seg2.p1.y, seg2.p2.x, seg2.p2.y
+    );
+
+    if (!hit) return null;
+    if (hit.type === 'point') {
+      return new Point(hit.x, hit.y);
     }
-
-    // Use parametric form: P1 + t(P2-P1) = P3 + u(P4-P3)
-    const dx1 = seg1.p2.x - seg1.p1.x;
-    const dy1 = seg1.p2.y - seg1.p1.y;
-    const dx2 = seg2.p2.x - seg2.p1.x;
-    const dy2 = seg2.p2.y - seg2.p1.y;
-
-    const denominator = dx1 * dy2 - dy1 * dx2;
-
-    // Check if segments are parallel
-    if (Math.abs(denominator) < this.EPSILON) {
-      return null;
-    }
-
-    const dx3 = seg2.p1.x - seg1.p1.x;
-    const dy3 = seg2.p1.y - seg1.p1.y;
-
-    const t = (dx3 * dy2 - dy3 * dx2) / denominator;
-    const u = (dx3 * dy1 - dy3 * dx1) / denominator;
-
-    // Check if intersection point lies within both segments
-    if (t >= -this.EPSILON && t <= 1 + this.EPSILON && u >= -this.EPSILON && u <= 1 + this.EPSILON) {
-      // Clamp to segment bounds
-      const clampedT = Math.max(0, Math.min(1, t));
-
-      const x = seg1.p1.x + clampedT * dx1;
-      const y = seg1.p1.y + clampedT * dy1;
-
-      return new Point(x, y);
-    }
-
-    return null;
+    return new Segment(new Point(hit.x1, hit.y1), new Point(hit.x2, hit.y2));
   }
 }
