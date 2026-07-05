@@ -3,6 +3,7 @@ import type { Shape } from '../models';
 import { Point, ShapeType } from '../models';
 import { IntersectionDetector, IntersectionType, SpatialIndex } from '../services';
 import type { IntersectionResult, BoundingBox } from '../services';
+import { WebGLRenderer } from '../rendering';
 import { tokens } from '../styles';
 import type { GridSettings } from '../App';
 
@@ -47,6 +48,20 @@ interface ViewTransform {
   scale: number;
 }
 
+interface CanvasSize {
+  width: number;
+  height: number;
+  dpr: number;
+}
+
+const layerStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 0,
+  left: 0,
+  width: '100%',
+  height: '100%',
+};
+
 export const Canvas: React.FC<CanvasProps> = ({
   shapes,
   onAddPoint,
@@ -57,98 +72,116 @@ export const Canvas: React.FC<CanvasProps> = ({
   onIntersectionComputingChange,
   gridSettings,
 }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const gridCanvasRef = useRef<HTMLCanvasElement>(null);
+  const glCanvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const rendererRef = useRef<WebGLRenderer | null>(null);
+
   const [transform, setTransform] = useState<ViewTransform>({
     offsetX: 0,
     offsetY: 0,
     scale: 1.0
   });
+  const [size, setSize] = useState<CanvasSize>({ width: 0, height: 0, dpr: 1 });
   const [isPanning, setIsPanning] = useState(false);
   const [lastMousePos, setLastMousePos] = useState<{ x: number; y: number } | null>(null);
   const [mouseWorldPos, setMouseWorldPos] = useState<Point | null>(null);
   const [intersections, setIntersections] = useState<IntersectionResult[]>([]);
 
-  // Spatial index for efficient viewport culling
+  // Spatial index for viewport queries (vertex markers, hit-testing)
   const spatialIndexRef = useRef<SpatialIndex>(new SpatialIndex());
 
-  // Rebuild spatial index when shapes change
+  // Track container size and device pixel ratio
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const update = () => {
+      setSize({
+        width: container.clientWidth,
+        height: container.clientHeight,
+        dpr: window.devicePixelRatio || 1,
+      });
+    };
+    update();
+
+    const observer = new ResizeObserver(update);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  // Initialize the WebGL renderer
+  useEffect(() => {
+    const canvas = glCanvasRef.current;
+    if (!canvas) return;
+
+    try {
+      rendererRef.current = new WebGLRenderer(canvas);
+    } catch (error) {
+      console.error('Failed to initialize WebGL renderer:', error);
+    }
+
+    return () => {
+      rendererRef.current?.dispose();
+      rendererRef.current = null;
+    };
+  }, []);
+
+  // Rebuild geometry when shapes change
   useEffect(() => {
     spatialIndexRef.current.buildIndex(shapes);
+    rendererRef.current?.setShapes(shapes);
   }, [shapes]);
 
   // Calculate viewport bounds in world coordinates
   const getViewportBounds = useCallback((): BoundingBox => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
-
-    // Convert screen corners to world coordinates
-    const topLeft = {
-      x: (-transform.offsetX - canvas.width / 2) / transform.scale,
-      y: (transform.offsetY + canvas.height / 2) / transform.scale
-    };
-    const bottomRight = {
-      x: (-transform.offsetX + canvas.width / 2) / transform.scale,
-      y: (transform.offsetY - canvas.height / 2) / transform.scale
-    };
+    const halfW = size.width / 2 / transform.scale;
+    const halfH = size.height / 2 / transform.scale;
+    const centerX = -transform.offsetX / transform.scale;
+    const centerY = transform.offsetY / transform.scale;
 
     return {
-      minX: topLeft.x,
-      minY: bottomRight.y,
-      maxX: bottomRight.x,
-      maxY: topLeft.y
+      minX: centerX - halfW,
+      minY: centerY - halfH,
+      maxX: centerX + halfW,
+      maxY: centerY + halfH
     };
-  }, [transform]);
-
-  // Get visible shapes using spatial index with LOD
-  const getVisibleShapes = useCallback((): Shape[] => {
-    const viewport = getViewportBounds();
-
-    // LOD: minimum diagonal size in pixels for a shape to be rendered
-    // This scales dynamically - at lower zoom levels, we require larger screen size
-    // This creates smooth progressive culling as you zoom out
-    // At scale=1: minDiagonal=6px, at scale=0.1: minDiagonal=12px, at scale=0.01: minDiagonal=18px
-    const baseMinDiagonal = 6;
-    const scaleFactor = Math.max(1, 1 + Math.log10(1 / Math.max(transform.scale, 0.001)));
-    const minDiagonalPixels = baseMinDiagonal * scaleFactor;
-
-    return spatialIndexRef.current.queryViewport(viewport, minDiagonalPixels, transform.scale);
-  }, [getViewportBounds, transform.scale]);
+  }, [transform, size]);
 
   // Convert screen coordinates to world coordinates
   const screenToWorld = useCallback((screenX: number, screenY: number): Point => {
-    const canvas = canvasRef.current;
-    if (!canvas) return new Point(0, 0);
+    const container = containerRef.current;
+    if (!container) return new Point(0, 0);
 
-    const rect = canvas.getBoundingClientRect();
-    const x = (screenX - rect.left - canvas.width / 2 - transform.offsetX) / transform.scale;
-    const y = -(screenY - rect.top - canvas.height / 2 - transform.offsetY) / transform.scale;
+    const rect = container.getBoundingClientRect();
+    const x = (screenX - rect.left - size.width / 2 - transform.offsetX) / transform.scale;
+    const y = -(screenY - rect.top - size.height / 2 - transform.offsetY) / transform.scale;
 
     return new Point(x, y);
-  }, [transform]);
+  }, [transform, size]);
 
-  // Convert world coordinates to screen coordinates
+  // Convert world coordinates to screen (CSS pixel) coordinates
   const worldToScreen = useCallback((worldX: number, worldY: number): { x: number; y: number } => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-
-    const x = worldX * transform.scale + canvas.width / 2 + transform.offsetX;
-    const y = -worldY * transform.scale + canvas.height / 2 + transform.offsetY;
+    const x = worldX * transform.scale + size.width / 2 + transform.offsetX;
+    const y = -worldY * transform.scale + size.height / 2 + transform.offsetY;
 
     return { x, y };
-  }, [transform]);
+  }, [transform, size]);
 
-  // Helper to create fill color from stroke color
-  const colorToFill = useCallback((color: string, alpha: number = 0.15): string => {
-    // Handle hex colors
-    if (color.startsWith('#')) {
-      const hex = color.slice(1);
-      const r = parseInt(hex.slice(0, 2), 16);
-      const g = parseInt(hex.slice(2, 4), 16);
-      const b = parseInt(hex.slice(4, 6), 16);
-      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-    }
-    return color;
-  }, []);
+  // Resize a canvas backing store to match the container and return a
+  // 2D context scaled so drawing code works in CSS pixels
+  const setup2dContext = useCallback((canvas: HTMLCanvasElement): CanvasRenderingContext2D | null => {
+    const deviceWidth = Math.max(1, Math.round(size.width * size.dpr));
+    const deviceHeight = Math.max(1, Math.round(size.height * size.dpr));
+    if (canvas.width !== deviceWidth) canvas.width = deviceWidth;
+    if (canvas.height !== deviceHeight) canvas.height = deviceHeight;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
+    return ctx;
+  }, [size]);
 
   // Draw user-defined window grid
   const drawUserGrid = useCallback((ctx: CanvasRenderingContext2D) => {
@@ -326,285 +359,100 @@ export const Canvas: React.FC<CanvasProps> = ({
       // Origin label
       ctx.fillText('0', originScreen.x + 6, originScreen.y + 6);
     }
-  }, [transform, worldToScreen, tokens.typography.fontFamily.mono, canvasColors]);
+  }, [transform, worldToScreen]);
 
-  // Batched rendering for non-selected shapes - reduces draw calls significantly
-  const drawShapesBatched = useCallback((ctx: CanvasRenderingContext2D, shapesByColor: Map<string, Shape[]>) => {
-    // LOD: Simplify geometry when zoomed out - progressive scaling
-    // At scale=1: 2px, at scale=0.1: 4px, at scale=0.01: 6px
-    const basePixelDistance = 2;
-    const distanceScaleFactor = Math.max(1, 1 + Math.log10(1 / Math.max(transform.scale, 0.001)));
-    const minPixelDistance = basePixelDistance * distanceScaleFactor;
-    const minWorldDistance = minPixelDistance / transform.scale;
-    // Angle threshold for preserving geometrically significant corners (cosine of 15°)
-    const cosAngleThreshold = Math.cos(15 * Math.PI / 180);
-
-    // Whether to draw individual points - progressive threshold
-    // Points become noise earlier at low zoom levels
-    const shouldDrawPoints = transform.scale > 1.0;
-    // Progressive point skipping: more aggressive as zoom decreases
-    const pointSkip = transform.scale < 2.0 ? Math.ceil(4 / Math.max(transform.scale, 0.01)) : 1;
-
-    for (const [colorKey, shapes] of shapesByColor) {
-      if (shapes.length === 0) continue;
-
-      // Parse color and type from key
-      const lastUnderscoreIndex = colorKey.lastIndexOf('_');
-      const color = colorKey.substring(0, lastUnderscoreIndex);
-      const type = colorKey.substring(lastUnderscoreIndex + 1);
-      const isContour = type === ShapeType.CONTOUR;
-
-      // Set up context for this batch
-      ctx.strokeStyle = color;
-      ctx.fillStyle = isContour ? colorToFill(color, 0.12) : 'transparent';
-      ctx.lineWidth = 2;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
-      // Draw all strokes in one batch
-      ctx.beginPath();
-      for (const shape of shapes) {
-        if (shape.points.length < 2) continue;
-
-        const firstPoint = worldToScreen(shape.points[0].x, shape.points[0].y);
-        ctx.moveTo(firstPoint.x, firstPoint.y);
-
-        // For contours, enforce minimum rendered point count to preserve shape topology
-        const minRenderedPoints = isContour ? Math.min(4, shape.points.length - 1) : 0;
-        let renderedCount = 1; // first point already rendered
-        let lastRenderedPoint = shape.points[0];
-        for (let i = 1; i < shape.points.length; i++) {
-          const currentPoint = shape.points[i];
-
-          // LOD: Skip intermediate points that are too close, but preserve corners
-          if (i < shape.points.length - 1) {
-            const dx = currentPoint.x - lastRenderedPoint.x;
-            const dy = currentPoint.y - lastRenderedPoint.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-
-            if (distance < minWorldDistance) {
-              // Check if this point is a significant corner by measuring direction change
-              // Compare incoming vector (lastRendered → current) with outgoing vector (current → next)
-              const nextPoint = shape.points[i + 1];
-              const nx = nextPoint.x - currentPoint.x;
-              const ny = nextPoint.y - currentPoint.y;
-              const nextDist = Math.sqrt(nx * nx + ny * ny);
-
-              if (nextDist > 0 && distance > 0) {
-                // Cosine of angle between vectors: dot(v1,v2) / (|v1|*|v2|)
-                const dot = dx * nx + dy * ny;
-                const cosAngle = dot / (distance * nextDist);
-                // If angle deviation from straight (cos=1) is significant, keep the point
-                if (cosAngle < cosAngleThreshold) {
-                  // This is a corner — do not skip
-                } else {
-                  continue;
-                }
-              } else {
-                continue;
-              }
-            }
-          }
-
-          const point = worldToScreen(currentPoint.x, currentPoint.y);
-          ctx.lineTo(point.x, point.y);
-          lastRenderedPoint = currentPoint;
-          renderedCount++;
-        }
-
-        // Safety net: if contour lost too many points, re-render with all points
-        if (isContour && renderedCount < minRenderedPoints) {
-          const firstPt = worldToScreen(shape.points[0].x, shape.points[0].y);
-          ctx.moveTo(firstPt.x, firstPt.y);
-          for (let i = 1; i < shape.points.length; i++) {
-            const pt = worldToScreen(shape.points[i].x, shape.points[i].y);
-            ctx.lineTo(pt.x, pt.y);
-          }
-        }
-
-        if (isContour) {
-          ctx.closePath();
-        }
-      }
-
-      // Fill all contours at once
-      if (isContour) {
-        ctx.fill();
-      }
-      ctx.stroke();
-
-      // Draw points for this batch (only if zoomed in enough)
-      if (shouldDrawPoints) {
-        ctx.fillStyle = color;
-
-        for (const shape of shapes) {
-          shape.points.forEach((point, index) => {
-            // Skip some points when zoomed out
-            if (pointSkip > 1 && index % pointSkip !== 0 &&
-                index !== 0 && index !== shape.points.length - 1) {
-              return;
-            }
-
-            const screenPoint = worldToScreen(point.x, point.y);
-            ctx.beginPath();
-            ctx.arc(screenPoint.x, screenPoint.y, 4, 0, Math.PI * 2);
-            ctx.fill();
-          });
-        }
-
-        // Draw inner highlights (only at high zoom levels)
-        if (transform.scale > 2.0) {
-          ctx.fillStyle = canvasColors.point;
-          for (const shape of shapes) {
-            shape.points.forEach((point, index) => {
-              if (pointSkip > 1 && index % pointSkip !== 0 &&
-                  index !== 0 && index !== shape.points.length - 1) {
-                return;
-              }
-
-              const screenPoint = worldToScreen(point.x, point.y);
-              ctx.beginPath();
-              ctx.arc(screenPoint.x, screenPoint.y, 1.5, 0, Math.PI * 2);
-              ctx.fill();
-            });
-          }
-        }
-      }
-    }
-  }, [transform, worldToScreen, colorToFill, ShapeType, canvasColors]);
-
-  const drawShape = useCallback((ctx: CanvasRenderingContext2D, shape: Shape) => {
+  // Draw a selected shape with highlight styling (geometry itself is also
+  // rendered by WebGL underneath; this draws the orange emphasis on top)
+  const drawSelectedShape = useCallback((ctx: CanvasRenderingContext2D, shape: Shape) => {
     if (shape.points.length < 2) return;
 
     const isContour = shape.type === ShapeType.CONTOUR;
-    const isSelected = shape.selected;
-    const shapeColor = shape.color;
 
-    // Set colors based on shape color and selection state
-    if (isSelected) {
-      ctx.strokeStyle = canvasColors.selected;
-      ctx.fillStyle = canvasColors.selectedFill;
-    } else {
-      ctx.strokeStyle = shapeColor;
-      ctx.fillStyle = isContour ? colorToFill(shapeColor, 0.12) : 'transparent';
-    }
-
-    ctx.lineWidth = isSelected ? 2.5 : 2;
+    ctx.strokeStyle = canvasColors.selected;
+    ctx.fillStyle = canvasColors.selectedFill;
+    ctx.lineWidth = 2.5;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-
-    // LOD: Simplify geometry when zoomed out - progressive scaling
-    // At scale=1: 2px, at scale=0.1: 4px, at scale=0.01: 6px
-    const basePixelDistance = 2;
-    const distanceScaleFactor = Math.max(1, 1 + Math.log10(1 / Math.max(transform.scale, 0.001)));
-    const minPixelDistance = basePixelDistance * distanceScaleFactor;
-    const minWorldDistance = minPixelDistance / transform.scale;
-    // Angle threshold for preserving geometrically significant corners (cosine of 15°)
-    const cosAngleThreshold = Math.cos(15 * Math.PI / 180);
 
     ctx.beginPath();
     const firstPoint = worldToScreen(shape.points[0].x, shape.points[0].y);
     ctx.moveTo(firstPoint.x, firstPoint.y);
-
-    // For contours, enforce minimum rendered point count to preserve shape topology
-    const minRenderedPoints = isContour ? Math.min(4, shape.points.length - 1) : 0;
-    let renderedCount = 1; // first point already rendered
-    let lastRenderedPoint = shape.points[0];
     for (let i = 1; i < shape.points.length; i++) {
-      const currentPoint = shape.points[i];
-
-      // LOD: Skip intermediate points that are too close, but preserve corners
-      if (i < shape.points.length - 1) {
-        const dx = currentPoint.x - lastRenderedPoint.x;
-        const dy = currentPoint.y - lastRenderedPoint.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-
-        if (distance < minWorldDistance) {
-          // Check if this point is a significant corner by measuring direction change
-          const nextPoint = shape.points[i + 1];
-          const nx = nextPoint.x - currentPoint.x;
-          const ny = nextPoint.y - currentPoint.y;
-          const nextDist = Math.sqrt(nx * nx + ny * ny);
-
-          if (nextDist > 0 && distance > 0) {
-            const dot = dx * nx + dy * ny;
-            const cosAngle = dot / (distance * nextDist);
-            if (cosAngle < cosAngleThreshold) {
-              // This is a corner — do not skip
-            } else {
-              continue;
-            }
-          } else {
-            continue;
-          }
-        }
-      }
-
-      const point = worldToScreen(currentPoint.x, currentPoint.y);
+      const point = worldToScreen(shape.points[i].x, shape.points[i].y);
       ctx.lineTo(point.x, point.y);
-      lastRenderedPoint = currentPoint;
-      renderedCount++;
     }
 
-    // Safety net: if contour lost too many points, re-render with all points
-    if (isContour && renderedCount < minRenderedPoints) {
-      ctx.beginPath();
-      const firstPt = worldToScreen(shape.points[0].x, shape.points[0].y);
-      ctx.moveTo(firstPt.x, firstPt.y);
-      for (let i = 1; i < shape.points.length; i++) {
-        const pt = worldToScreen(shape.points[i].x, shape.points[i].y);
-        ctx.lineTo(pt.x, pt.y);
-      }
-      ctx.closePath();
-      ctx.fill();
-    } else if (isContour) {
+    if (isContour) {
       ctx.closePath();
       ctx.fill();
     }
-
     ctx.stroke();
 
-    // LOD: Only draw individual points when zoomed in enough
-    // Points shown only for selected shapes at low zoom, or when zoomed in
-    const shouldDrawPoints = transform.scale > 1.0 || isSelected;
+    // Vertex markers with glow
+    for (const point of shape.points) {
+      const screenPoint = worldToScreen(point.x, point.y);
 
-    if (shouldDrawPoints) {
-      // LOD: Progressive point skipping - more aggressive as zoom decreases
-      const pointSkip = isSelected ? 1 : (transform.scale < 2.0 ? Math.ceil(4 / Math.max(transform.scale, 0.01)) : 1);
+      ctx.fillStyle = canvasColors.selectedFill;
+      ctx.beginPath();
+      ctx.arc(screenPoint.x, screenPoint.y, 8, 0, Math.PI * 2);
+      ctx.fill();
 
+      ctx.fillStyle = canvasColors.selected;
+      ctx.beginPath();
+      ctx.arc(screenPoint.x, screenPoint.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = canvasColors.point;
+      ctx.beginPath();
+      ctx.arc(screenPoint.x, screenPoint.y, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }, [worldToScreen]);
+
+  // Draw vertex markers for non-selected shapes when zoomed in
+  const drawPointMarkers = useCallback((ctx: CanvasRenderingContext2D, shapesInView: Shape[]) => {
+    if (transform.scale <= 1.0) return;
+
+    // Skip some markers at moderate zoom so they don't turn into noise
+    const pointSkip = transform.scale < 2.0 ? Math.ceil(4 / Math.max(transform.scale, 0.01)) : 1;
+    const drawInnerHighlight = transform.scale > 2.0;
+
+    for (const shape of shapesInView) {
+      if (!shape.visible || shape.selected) continue;
+
+      ctx.fillStyle = shape.color;
       shape.points.forEach((point, index) => {
-        // Skip some points when zoomed out (but always draw first, last, and selected)
-        if (!isSelected && pointSkip > 1 && index % pointSkip !== 0 &&
+        if (pointSkip > 1 && index % pointSkip !== 0 &&
             index !== 0 && index !== shape.points.length - 1) {
           return;
         }
 
         const screenPoint = worldToScreen(point.x, point.y);
-
-        if (isSelected) {
-          // Outer glow
-          ctx.fillStyle = canvasColors.selectedFill;
-          ctx.beginPath();
-          ctx.arc(screenPoint.x, screenPoint.y, 8, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        // Main point
-        ctx.fillStyle = isSelected ? canvasColors.selected : shapeColor;
         ctx.beginPath();
         ctx.arc(screenPoint.x, screenPoint.y, 4, 0, Math.PI * 2);
         ctx.fill();
+      });
+    }
 
-        // Inner highlight - only at high zoom levels
-        if (transform.scale > 2.0 || isSelected) {
-          ctx.fillStyle = canvasColors.point;
+    if (drawInnerHighlight) {
+      ctx.fillStyle = canvasColors.point;
+      for (const shape of shapesInView) {
+        if (!shape.visible || shape.selected) continue;
+
+        shape.points.forEach((point, index) => {
+          if (pointSkip > 1 && index % pointSkip !== 0 &&
+              index !== 0 && index !== shape.points.length - 1) {
+            return;
+          }
+
+          const screenPoint = worldToScreen(point.x, point.y);
           ctx.beginPath();
           ctx.arc(screenPoint.x, screenPoint.y, 1.5, 0, Math.PI * 2);
           ctx.fill();
-        }
-      });
+        });
+      }
     }
-  }, [transform, worldToScreen, colorToFill, ShapeType, canvasColors]);
+  }, [transform.scale, worldToScreen]);
 
   const drawTempShape = useCallback((ctx: CanvasRenderingContext2D, points: Point[], isContour: boolean) => {
     if (points.length === 0) return;
@@ -661,7 +509,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       ctx.arc(screenPoint.x, screenPoint.y, 2, 0, Math.PI * 2);
       ctx.fill();
     });
-  }, [worldToScreen, mouseWorldPos, canvasColors]);
+  }, [worldToScreen, mouseWorldPos]);
 
   const drawIntersections = useCallback((ctx: CanvasRenderingContext2D) => {
     intersections.forEach((intersection: IntersectionResult) => {
@@ -713,7 +561,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         ctx.shadowBlur = 0;
       }
     });
-  }, [worldToScreen, intersections, IntersectionType, canvasColors]);
+  }, [worldToScreen, intersections]);
 
   const drawCursor = useCallback((ctx: CanvasRenderingContext2D, worldPos: Point) => {
     const screenPos = worldToScreen(worldPos.x, worldPos.y);
@@ -758,26 +606,26 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Text
     ctx.fillStyle = canvasColors.cursorLabel;
     ctx.fillText(coordText, bgX, bgY + 4);
-  }, [worldToScreen, canvasColors]);
+  }, [worldToScreen]);
 
   // Draw performance statistics overlay
-  const drawStats = useCallback((ctx: CanvasRenderingContext2D, visibleCount: number, totalCount: number, scale: number) => {
+  const drawStats = useCallback((ctx: CanvasRenderingContext2D, totalCount: number, scale: number) => {
     if (totalCount === 0) return; // Don't show stats when no shapes
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const statsText = `Rendering: ${visibleCount} / ${totalCount} shapes | Zoom: ${scale.toFixed(3)}x`;
+    const stats = rendererRef.current?.getStats();
+    const geometry = stats
+      ? ` | GPU: ${stats.triangles} tris, ${stats.segments} segs`
+      : '';
+    const statsText = `Shapes: ${totalCount}${geometry} | Zoom: ${scale.toFixed(3)}x`;
     ctx.font = '11px "SF Mono", "Fira Code", Consolas, monospace';
 
     // Position in bottom-left corner
     const x = 10;
-    const y = canvas.height - 15;
+    const y = size.height - 15;
 
-    // Text with dark blue color
     ctx.fillStyle = '#3ff832ff';
     ctx.fillText(statsText, x, y);
-  }, [canvasRef]);
+  }, [size.height]);
 
   // Handle mouse wheel for zooming
   const handleWheel = useCallback((e: WheelEvent) => {
@@ -790,43 +638,20 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Clamp scale - generous limits to allow zooming into small coordinates
     const clampedScale = Math.min(1e8, newScale);
 
-    // Zoom relative to screen center
-    // Calculate world coordinates of screen center before zoom
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    // Zoom relative to screen center: keep the world point at the screen
+    // center fixed while changing scale
+    const worldCenterX = -transform.offsetX / transform.scale;
+    const worldCenterY = transform.offsetY / transform.scale;
 
-    // Center of screen in screen coordinates
-    const screenCenterX = canvas.width / 2;
-    const screenCenterY = canvas.height / 2;
-
-    // Convert screen center to world coordinates (before zoom)
-    const worldCenterX = (screenCenterX - canvas.width / 2 - transform.offsetX) / transform.scale;
-    const worldCenterY = -(screenCenterY - canvas.height / 2 - transform.offsetY) / transform.scale;
-
-    // Apply new scale and adjust offset to keep world center at screen center
-    setTransform(() => {
-      const scale = clampedScale;
-
-      // Calculate new offset so that worldCenter remains at screen center
-      // From: screenX = worldX * scale + canvas.width / 2 + offsetX
-      // We want: screenCenterX = worldCenterX * scale + canvas.width / 2 + newOffsetX
-      // So: newOffsetX = screenCenterX - canvas.width / 2 - worldCenterX * scale
-      const newOffsetX = screenCenterX - canvas.width / 2 - worldCenterX * scale;
-      const newOffsetY = screenCenterY - canvas.height / 2 + worldCenterY * scale; // Y is inverted
-
-      return {
-        offsetX: newOffsetX,
-        offsetY: newOffsetY,
-        scale
-      };
+    setTransform({
+      offsetX: -worldCenterX * clampedScale,
+      offsetY: worldCenterY * clampedScale,
+      scale: clampedScale
     });
   }, [transform]);
 
   // Handle mouse move
   const handleMouseMove = useCallback((e: MouseEvent) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
     const mouseX = e.clientX;
     const mouseY = e.clientY;
 
@@ -851,9 +676,6 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   // Handle mouse down
   const handleMouseDown = useCallback((e: MouseEvent) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
     if (e.button === 1 || (e.button === 0 && e.altKey)) {
       // Middle mouse button or Alt+Left click for panning
       setIsPanning(true);
@@ -874,20 +696,23 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   // Setup event listeners
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const container = containerRef.current;
+    if (!container) return;
 
-    canvas.addEventListener('wheel', handleWheel, { passive: false });
-    canvas.addEventListener('mousedown', handleMouseDown);
-    canvas.addEventListener('mousemove', handleMouseMove);
-    canvas.addEventListener('mouseup', handleMouseUp);
-    canvas.addEventListener('mouseleave', () => setIsPanning(false));
+    const handleMouseLeave = () => setIsPanning(false);
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    container.addEventListener('mousedown', handleMouseDown);
+    container.addEventListener('mousemove', handleMouseMove);
+    container.addEventListener('mouseup', handleMouseUp);
+    container.addEventListener('mouseleave', handleMouseLeave);
 
     return () => {
-      canvas.removeEventListener('wheel', handleWheel);
-      canvas.removeEventListener('mousedown', handleMouseDown);
-      canvas.removeEventListener('mousemove', handleMouseMove);
-      canvas.removeEventListener('mouseup', handleMouseUp);
+      container.removeEventListener('wheel', handleWheel);
+      container.removeEventListener('mousedown', handleMouseDown);
+      container.removeEventListener('mousemove', handleMouseMove);
+      container.removeEventListener('mouseup', handleMouseUp);
+      container.removeEventListener('mouseleave', handleMouseLeave);
     };
   }, [handleWheel, handleMouseDown, handleMouseMove, handleMouseUp]);
 
@@ -926,96 +751,98 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
   }, [shapes, showIntersections, onIntersectionComputingChange]);
 
-  // Drawing function
+  // Render the WebGL geometry layer (only on data / view / size changes)
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const renderer = rendererRef.current;
+    const canvas = glCanvasRef.current;
+    if (!renderer || !canvas || size.width === 0) return;
 
-    const ctx = canvas.getContext('2d');
+    const deviceWidth = Math.max(1, Math.round(size.width * size.dpr));
+    const deviceHeight = Math.max(1, Math.round(size.height * size.dpr));
+    if (canvas.width !== deviceWidth) canvas.width = deviceWidth;
+    if (canvas.height !== deviceHeight) canvas.height = deviceHeight;
+
+    renderer.render(transform, size.width, size.height, size.dpr);
+  }, [shapes, transform, size]);
+
+  // Render the background layer: fill + coordinate grid + user window grid
+  useEffect(() => {
+    const canvas = gridCanvasRef.current;
+    if (!canvas || size.width === 0) return;
+
+    const ctx = setup2dContext(canvas);
     if (!ctx) return;
 
-    // Set canvas size
-    canvas.width = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
-
-    // Clear canvas
     ctx.fillStyle = canvasColors.background;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, size.width, size.height);
 
-    // Save context
-    ctx.save();
-
-    // Draw coordinate axes and grid
-    drawGrid(ctx, canvas.width, canvas.height);
-
-    // Draw user window grid (if enabled)
+    drawGrid(ctx, size.width, size.height);
     drawUserGrid(ctx);
+  }, [size, setup2dContext, drawGrid, drawUserGrid]);
 
-    // Get only visible shapes using spatial index with LOD culling
-    const visibleShapes = getVisibleShapes();
+  // Render the interactive overlay: selection, vertex markers, intersections,
+  // temp shape, cursor, stats. Redraws on mouse move without touching the
+  // geometry layer.
+  useEffect(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas || size.width === 0) return;
 
-    // Separate selected and non-selected shapes for optimized rendering
-    const selectedShapesToDraw: Shape[] = [];
-    const nonSelectedByColor = new Map<string, Shape[]>();
+    const ctx = setup2dContext(canvas);
+    if (!ctx) return;
 
-    for (const shape of visibleShapes) {
-      if (!shape.visible) continue;
+    ctx.clearRect(0, 0, size.width, size.height);
 
-      if (shape.selected) {
-        selectedShapesToDraw.push(shape);
-      } else {
-        const colorKey = `${shape.color}_${shape.type}`;
-        const group = nonSelectedByColor.get(colorKey);
-        if (group) {
-          group.push(shape);
-        } else {
-          nonSelectedByColor.set(colorKey, [shape]);
-        }
+    // Shapes currently in the viewport (spatial index query, no LOD filtering)
+    const shapesInView = spatialIndexRef.current.queryViewport(getViewportBounds(), 0, transform.scale);
+
+    // Selected shape highlights
+    for (const shape of shapesInView) {
+      if (shape.visible && shape.selected) {
+        drawSelectedShape(ctx, shape);
       }
     }
 
-    // Draw non-selected shapes with batching by color
-    drawShapesBatched(ctx, nonSelectedByColor);
+    // Vertex markers when zoomed in
+    drawPointMarkers(ctx, shapesInView);
 
-    // Draw selected shapes individually (they need special styling)
-    for (const shape of selectedShapesToDraw) {
-      drawShape(ctx, shape);
-    }
-
-    // Draw intersections if enabled
+    // Intersections if enabled
     if (showIntersections && intersections.length > 0) {
       drawIntersections(ctx);
     }
 
-    // Draw temporary points during drawing
+    // Temporary points during drawing
     if (tempPoints.length > 0) {
       drawTempShape(ctx, tempPoints, drawingMode === 'contour');
     }
 
-    // Draw mouse cursor position
+    // Mouse cursor position
     if (mouseWorldPos && drawingMode) {
       drawCursor(ctx, mouseWorldPos);
     }
 
-    // Draw performance stats (visible shapes / total shapes)
+    // Performance stats
     if (showStats) {
       const totalShapes = shapes.filter(s => s.visible).length;
-      const visibleCount = visibleShapes.filter(s => s.visible).length;
-      drawStats(ctx, visibleCount, totalShapes, transform.scale);
+      drawStats(ctx, totalShapes, transform.scale);
     }
-
-    // Restore context
-    ctx.restore();
-  }, [shapes, transform, tempPoints, drawingMode, mouseWorldPos, worldToScreen, showIntersections, intersections, getVisibleShapes, showStats, drawGrid, drawUserGrid, drawShapesBatched, drawShape, drawIntersections, drawTempShape, drawCursor, drawStats, canvasColors.background]);
+  }, [shapes, transform, size, setup2dContext, getViewportBounds, drawSelectedShape,
+      drawPointMarkers, drawIntersections, drawTempShape, drawCursor, drawStats,
+      tempPoints, drawingMode, mouseWorldPos, showIntersections, intersections, showStats]);
 
   return (
-    <canvas
-      ref={canvasRef}
+    <div
+      ref={containerRef}
       style={{
+        position: 'relative',
         width: '100%',
         height: '100%',
+        overflow: 'hidden',
         cursor: isPanning ? 'grabbing' : (drawingMode ? 'crosshair' : 'default')
       }}
-    />
+    >
+      <canvas ref={gridCanvasRef} style={layerStyle} />
+      <canvas ref={glCanvasRef} style={layerStyle} />
+      <canvas ref={overlayCanvasRef} style={layerStyle} />
+    </div>
   );
 };
