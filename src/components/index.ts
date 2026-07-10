@@ -4,3 +4,4 @@ export { LayersPanel } from './LayersPanel';
 export { SidePanel } from './SidePanel';
 export { Toolbar } from './Toolbar';
 export { GdsImportDialog } from './GdsImportDialog';
+export { TextImportDialog } from './TextImportDialog';

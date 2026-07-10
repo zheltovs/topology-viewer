@@ -47,6 +47,20 @@ export function createLayer(
 }
 
 /**
+ * Returns `baseName` if it is not taken, otherwise "baseName (2)", "baseName (3)", ...
+ */
+export function uniqueLayerName(baseName: string, existingNames: Set<string>): string {
+  if (!existingNames.has(baseName)) return baseName;
+  let counter = 2;
+  let candidate = `${baseName} (${counter})`;
+  while (existingNames.has(candidate)) {
+    counter++;
+    candidate = `${baseName} (${counter})`;
+  }
+  return candidate;
+}
+
+/**
  * Default layer for shapes without a specific layer
  */
 export const DEFAULT_LAYER_ID = '__default__';

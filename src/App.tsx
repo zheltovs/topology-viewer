@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
-import { Canvas, SidePanel, Toolbar, GdsImportDialog } from './components';
-import { Point, Chain, Contour } from './models';
+import { Canvas, SidePanel, Toolbar, GdsImportDialog, TextImportDialog } from './components';
+import { Point, Chain, Contour, createLayer, uniqueLayerName, LAYER_COLORS } from './models';
 import type { Shape, Layer } from './models';
 import { CommandHistory, AddShapeCommand, RemoveShapeCommand } from './services';
 import { useKeyboardShortcuts } from './hooks/useKeyboard';
@@ -23,6 +23,14 @@ interface GdsImportState {
   objectCounts: Map<string, number>;
   fileBuffer: ArrayBuffer | null;
   units?: GdsUnits;
+}
+
+// State for text import dialog (shapes already parsed, waiting for user decision)
+interface TextImportState {
+  isOpen: boolean;
+  shapes: Shape[];
+  fileName: string;
+  layerBaseName: string;
 }
 
 function App() {
@@ -54,6 +62,12 @@ function App() {
     layers: [],
     objectCounts: new Map(),
     fileBuffer: null
+  });
+  const [textImportState, setTextImportState] = useState<TextImportState>({
+    isOpen: false,
+    shapes: [],
+    fileName: '',
+    layerBaseName: ''
   });
   const [units, setUnits] = useState<GdsUnits | undefined>(undefined);
   const [isDragging, setIsDragging] = useState(false);
@@ -178,6 +192,34 @@ function App() {
     ));
   }, []);
 
+  // Apply a parsed text import: put shapes into a new layer, optionally clearing the canvas
+  const applyTextImport = useCallback((newShapes: Shape[], layerBaseName: string, clearCanvas: boolean) => {
+    const existingNames = clearCanvas ? new Set<string>() : new Set(layers.map(l => l.name));
+    const colorIndex = clearCanvas ? 0 : layers.length;
+    const layer = createLayer(
+      uniqueLayerName(layerBaseName, existingNames),
+      LAYER_COLORS[colorIndex % LAYER_COLORS.length]
+    );
+
+    for (const shape of newShapes) {
+      shape.layerId = layer.id;
+      shape.color = layer.color;
+    }
+
+    if (clearCanvas) {
+      commandHistory.clear();
+      setShapes(newShapes);
+      setLayers([layer]);
+      setUnits(undefined);
+      setSelectedShapeIds([]);
+      updateHistoryState();
+    } else {
+      setLayers(prev => [...prev, layer]);
+      setShapes(prev => [...prev, ...newShapes]);
+      setSelectedShapeIds([]);
+    }
+  }, [layers, commandHistory, updateHistoryState]);
+
   // Process a single imported file (shared by click-import and drag-and-drop)
   const handleFile = useCallback(async (file: File) => {
     try {
@@ -198,7 +240,6 @@ function App() {
           units: layerInfo.units
         });
       } else {
-        // For other files, import directly
         const content = await file.text();
         const lines = content.trim().split('\n');
         const parser = parserRegistry.getParser();
@@ -227,19 +268,37 @@ function App() {
           newShapes.push(newShape);
         }
 
-        if (newShapes.length > 0) {
-          commandHistory.clear();
-          setShapes(newShapes);
-          setLayers([]);
-          setUnits(undefined);
-          setSelectedShapeIds([]);
-          updateHistoryState();
+        if (newShapes.length === 0) return;
+
+        const layerBaseName = file.name.replace(/\.[^.]+$/, '') || 'Imported';
+
+        if (shapes.length > 0 || layers.length > 0) {
+          // Existing content: ask the user whether to clear the canvas
+          setTextImportState({
+            isOpen: true,
+            shapes: newShapes,
+            fileName: file.name,
+            layerBaseName
+          });
+        } else {
+          applyTextImport(newShapes, layerBaseName, true);
         }
       }
     } catch (error) {
       alert(`Error reading file: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-  }, [commandHistory, updateHistoryState, parserRegistry]);
+  }, [shapes.length, layers.length, applyTextImport, parserRegistry]);
+
+  // Handle text import dialog confirmation
+  const handleTextImportConfirm = useCallback((clearCanvas: boolean) => {
+    applyTextImport(textImportState.shapes, textImportState.layerBaseName, clearCanvas);
+    setTextImportState({ isOpen: false, shapes: [], fileName: '', layerBaseName: '' });
+  }, [textImportState.shapes, textImportState.layerBaseName, applyTextImport]);
+
+  // Handle text import dialog cancellation
+  const handleTextImportCancel = useCallback(() => {
+    setTextImportState({ isOpen: false, shapes: [], fileName: '', layerBaseName: '' });
+  }, []);
 
   // Apply coordinate scale divisor to all shapes
   const scaleFactorRef = useRef(1);
@@ -324,18 +383,9 @@ function App() {
             const existingNames = new Set(prevLayers.map(l => l.name));
 
             const uniqueLayers = result.layers.map(newLayer => {
-              if (!existingNames.has(newLayer.name)) {
-                existingNames.add(newLayer.name);
-                return newLayer;
-              }
-              let counter = 2;
-              let candidate = `${newLayer.name} (${counter})`;
-              while (existingNames.has(candidate)) {
-                counter++;
-                candidate = `${newLayer.name} (${counter})`;
-              }
-              existingNames.add(candidate);
-              return { ...newLayer, name: candidate };
+              const name = uniqueLayerName(newLayer.name, existingNames);
+              existingNames.add(name);
+              return name === newLayer.name ? newLayer : { ...newLayer, name };
             });
 
             return [...prevLayers, ...uniqueLayers];
@@ -522,6 +572,16 @@ function App() {
           onToggleLayerVisibility={handleToggleLayerVisibility}
         />
       </div>
+
+      {textImportState.isOpen && (
+        <TextImportDialog
+          fileName={textImportState.fileName}
+          shapeCount={textImportState.shapes.length}
+          layerName={textImportState.layerBaseName}
+          onConfirm={handleTextImportConfirm}
+          onCancel={handleTextImportCancel}
+        />
+      )}
 
       {gdsImportState.isOpen && (
         <GdsImportDialog
