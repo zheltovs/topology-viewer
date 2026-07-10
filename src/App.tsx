@@ -25,12 +25,17 @@ interface GdsImportState {
   units?: GdsUnits;
 }
 
+// A parsed text file waiting to be imported; each file becomes its own layer
+interface ParsedTextFile {
+  fileName: string;
+  layerBaseName: string;
+  shapes: Shape[];
+}
+
 // State for text import dialog (shapes already parsed, waiting for user decision)
 interface TextImportState {
   isOpen: boolean;
-  shapes: Shape[];
-  fileName: string;
-  layerBaseName: string;
+  files: ParsedTextFile[];
 }
 
 function App() {
@@ -65,9 +70,7 @@ function App() {
   });
   const [textImportState, setTextImportState] = useState<TextImportState>({
     isOpen: false,
-    shapes: [],
-    fileName: '',
-    layerBaseName: ''
+    files: []
   });
   const [units, setUnits] = useState<GdsUnits | undefined>(undefined);
   const [isDragging, setIsDragging] = useState(false);
@@ -192,112 +195,143 @@ function App() {
     ));
   }, []);
 
-  // Apply a parsed text import: put shapes into a new layer, optionally clearing the canvas
-  const applyTextImport = useCallback((newShapes: Shape[], layerBaseName: string, clearCanvas: boolean) => {
+  // Apply parsed text files: each file goes into its own new layer, optionally clearing the canvas
+  const applyTextImport = useCallback((files: ParsedTextFile[], clearCanvas: boolean) => {
     const existingNames = clearCanvas ? new Set<string>() : new Set(layers.map(l => l.name));
-    const colorIndex = clearCanvas ? 0 : layers.length;
-    const layer = createLayer(
-      uniqueLayerName(layerBaseName, existingNames),
-      LAYER_COLORS[colorIndex % LAYER_COLORS.length]
-    );
+    let colorIndex = clearCanvas ? 0 : layers.length;
+    const newLayers: Layer[] = [];
+    const newShapes: Shape[] = [];
 
-    for (const shape of newShapes) {
-      shape.layerId = layer.id;
-      shape.color = layer.color;
+    for (const file of files) {
+      const layer = createLayer(
+        uniqueLayerName(file.layerBaseName, existingNames),
+        LAYER_COLORS[colorIndex++ % LAYER_COLORS.length]
+      );
+      existingNames.add(layer.name);
+
+      for (const shape of file.shapes) {
+        shape.layerId = layer.id;
+        shape.color = layer.color;
+      }
+
+      newLayers.push(layer);
+      newShapes.push(...file.shapes);
     }
 
     if (clearCanvas) {
       commandHistory.clear();
       setShapes(newShapes);
-      setLayers([layer]);
+      setLayers(newLayers);
       setUnits(undefined);
       setSelectedShapeIds([]);
       updateHistoryState();
     } else {
-      setLayers(prev => [...prev, layer]);
+      setLayers(prev => [...prev, ...newLayers]);
       setShapes(prev => [...prev, ...newShapes]);
       setSelectedShapeIds([]);
     }
   }, [layers, commandHistory, updateHistoryState]);
 
-  // Process a single imported file (shared by click-import and drag-and-drop)
-  const handleFile = useCallback(async (file: File) => {
-    try {
-      const fileName = file.name.toLowerCase();
-      const isGds = fileName.endsWith('.gds') || fileName.endsWith('.gds2');
+  // Parse a text file into shapes (one shape per line)
+  const parseTextFile = useCallback(async (file: File): Promise<ParsedTextFile> => {
+    const content = await file.text();
+    const lines = content.trim().split('\n');
+    const parser = parserRegistry.getParser();
+    const newShapes: Shape[] = [];
 
-      if (isGds) {
-        // For GDS files, show layer selection dialog first
-        const buffer = await file.arrayBuffer();
-        const gds2Parser = new Gds2Parser();
-        const layerInfo = gds2Parser.scanLayers(buffer);
+    for (const line of lines) {
+      if (!line.trim()) continue;
 
-        setGdsImportState({
-          isOpen: true,
-          layers: layerInfo.layers,
-          objectCounts: layerInfo.objectCounts,
-          fileBuffer: buffer,
-          units: layerInfo.units
-        });
+      const points = parser.parsePoints(line.trim());
+
+      if (points.length < 2) {
+        console.warn('Skipping line with less than 2 points:', line);
+        continue;
+      }
+
+      let newShape: Shape;
+      const firstPoint = points[0];
+      const lastPoint = points[points.length - 1];
+
+      if (firstPoint.equals(lastPoint)) {
+        newShape = new Contour(points);
       } else {
-        const content = await file.text();
-        const lines = content.trim().split('\n');
-        const parser = parserRegistry.getParser();
-        const newShapes: Shape[] = [];
+        newShape = new Chain(points);
+      }
 
-        for (const line of lines) {
-          if (!line.trim()) continue;
+      newShapes.push(newShape);
+    }
 
-          const points = parser.parsePoints(line.trim());
+    return {
+      fileName: file.name,
+      layerBaseName: file.name.replace(/\.[^.]+$/, '') || 'Imported',
+      shapes: newShapes
+    };
+  }, [parserRegistry]);
 
-          if (points.length < 2) {
-            console.warn('Skipping line with less than 2 points:', line);
-            continue;
-          }
+  // Process imported files (shared by click-import and drag-and-drop).
+  // A single file may be GDS or text; multiple files are supported for .txt only.
+  const handleFiles = useCallback(async (inputFiles: File[]) => {
+    try {
+      if (inputFiles.length === 0) return;
 
-          let newShape: Shape;
-          const firstPoint = points[0];
-          const lastPoint = points[points.length - 1];
+      if (inputFiles.length === 1) {
+        const file = inputFiles[0];
+        const fileName = file.name.toLowerCase();
 
-          if (firstPoint.equals(lastPoint)) {
-            newShape = new Contour(points);
-          } else {
-            newShape = new Chain(points);
-          }
+        if (fileName.endsWith('.gds') || fileName.endsWith('.gds2')) {
+          // For GDS files, show layer selection dialog first
+          const buffer = await file.arrayBuffer();
+          const gds2Parser = new Gds2Parser();
+          const layerInfo = gds2Parser.scanLayers(buffer);
 
-          newShapes.push(newShape);
-        }
-
-        if (newShapes.length === 0) return;
-
-        const layerBaseName = file.name.replace(/\.[^.]+$/, '') || 'Imported';
-
-        if (shapes.length > 0 || layers.length > 0) {
-          // Existing content: ask the user whether to clear the canvas
-          setTextImportState({
+          setGdsImportState({
             isOpen: true,
-            shapes: newShapes,
-            fileName: file.name,
-            layerBaseName
+            layers: layerInfo.layers,
+            objectCounts: layerInfo.objectCounts,
+            fileBuffer: buffer,
+            units: layerInfo.units
           });
-        } else {
-          applyTextImport(newShapes, layerBaseName, true);
+          return;
         }
+      }
+
+      // Multiple files: only .txt is supported
+      let textFiles = inputFiles;
+      if (inputFiles.length > 1) {
+        textFiles = inputFiles.filter(f => f.name.toLowerCase().endsWith('.txt'));
+        const skipped = inputFiles.filter(f => !textFiles.includes(f));
+        if (skipped.length > 0) {
+          alert(`Multiple file import supports .txt only. Skipped: ${skipped.map(f => f.name).join(', ')}`);
+        }
+        if (textFiles.length === 0) return;
+      }
+
+      const parsedFiles = (await Promise.all(textFiles.map(parseTextFile)))
+        .filter(f => f.shapes.length > 0);
+
+      if (parsedFiles.length === 0) return;
+
+      if (shapes.length > 0 || layers.length > 0) {
+        // Existing content: ask the user whether to clear the canvas
+        setTextImportState({ isOpen: true, files: parsedFiles });
+      } else {
+        applyTextImport(parsedFiles, true);
       }
     } catch (error) {
       alert(`Error reading file: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-  }, [shapes.length, layers.length, applyTextImport, parserRegistry]);
+  }, [shapes.length, layers.length, applyTextImport, parseTextFile]);
 
   // Handle text import dialog confirmation
   const handleTextImportConfirm = useCallback((clearCanvas: boolean) => {
-    applyTextImport(textImportState.shapes, textImportState.layerBaseName, clearCanvas);
-    setTextImportState({ isOpen: false, shapes: [], fileName: '', layerBaseName: '' });
-  }, [textImportState.shapes, textImportState.layerBaseName, applyTextImport]);
+    applyTextImport(textImportState.files, clearCanvas);
+    setTextImportState({ isOpen: false, files: [] });
+  }, [textImportState.files, applyTextImport]);
 
   // Handle text import dialog cancellation
   const handleTextImportCancel = useCallback(() => {
-    setTextImportState({ isOpen: false, shapes: [], fileName: '', layerBaseName: '' });
+    setTextImportState({ isOpen: false, files: [] });
   }, []);
 
   // Apply coordinate scale divisor to all shapes
@@ -318,12 +352,13 @@ function App() {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.txt,.csv,.gds,.gds2';
+    input.multiple = true;
     input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) await handleFile(file);
+      const files = (e.target as HTMLInputElement).files;
+      if (files) await handleFiles(Array.from(files));
     };
     input.click();
-  }, [handleFile]);
+  }, [handleFiles]);
 
   // Drag-and-drop handlers
   const handleDragEnter = useCallback((e: React.DragEvent) => {
@@ -347,9 +382,8 @@ function App() {
     e.preventDefault();
     dragCounterRef.current = 0;
     setIsDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) await handleFile(file);
-  }, [handleFile]);
+    await handleFiles(Array.from(e.dataTransfer.files));
+  }, [handleFiles]);
 
   // Handle GDS import confirmation
   const handleGdsImportConfirm = useCallback((selectedLayerIds: string[], clearCanvas: boolean) => {
@@ -575,9 +609,11 @@ function App() {
 
       {textImportState.isOpen && (
         <TextImportDialog
-          fileName={textImportState.fileName}
-          shapeCount={textImportState.shapes.length}
-          layerName={textImportState.layerBaseName}
+          files={textImportState.files.map(f => ({
+            fileName: f.fileName,
+            layerName: f.layerBaseName,
+            shapeCount: f.shapes.length
+          }))}
           onConfirm={handleTextImportConfirm}
           onCancel={handleTextImportCancel}
         />
