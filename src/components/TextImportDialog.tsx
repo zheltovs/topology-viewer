@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useDialogKeys } from './useDialogKeys';
 
 export interface TextImportFileInfo {
   fileName: string;
@@ -17,6 +18,8 @@ export function TextImportDialog({ files, onConfirm, onCancel }: TextImportDialo
 
   const single = files.length === 1;
   const totalShapes = files.reduce((sum, f) => sum + f.shapeCount, 0);
+
+  useDialogKeys(onCancel, () => onConfirm(clearCanvas));
 
   return (
     <div className="gds-import-overlay" onClick={onCancel}>

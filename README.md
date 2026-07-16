@@ -24,7 +24,7 @@ Ideal for quickly inspecting **IC / semiconductor layout** geometry, CAD contour
 - 🗂️ **Layers** — colored layers with visibility toggles, auto-created on GDS import
 - ✂️ **Intersection detection** — point and overlap intersections, computed in a Web Worker
 - ⚡ **WebGL2 rendering** — GPU-buffered geometry; pan/zoom cost is independent of scene size
-- 🔍 **Pan & Zoom** — mouse-wheel zoom, Alt-drag or middle-button pan
+- 🔍 **Pan & Zoom** — mouse-wheel zoom; drag to pan (Alt-drag / middle-button also work); `Home` or the Fit button frames all shapes
 - 🧭 **Grid overlay** — configurable window size and step
 - 📐 **Units-aware** — reads the GDSII `UNITS` record; coordinates preserved in raw DB units
 - ↩️ **Undo / Redo** — full command history
@@ -66,7 +66,9 @@ docker compose --profile prod up --build   # nginx-served production build
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` / `Ctrl+Shift+Z` | Redo |
 | `Ctrl+I` | Toggle stats overlay |
-| `Esc` | Finish drawing / cancel |
+| `Esc` | Finish current shape; press again to exit drawing mode |
+| `Home` | Fit view to shapes |
+| `Delete` | Delete selected shapes |
 
 ## 📄 Text Import Format
 

@@ -1,11 +1,17 @@
 import type { Shape } from '../models';
 
 /**
- * Interface for undoable commands
+ * Interface for undoable commands.
+ *
+ * Commands are pure transforms over the CURRENT shapes array instead of
+ * snapshots captured at construction time. This lets history entries compose
+ * with changes made outside the history (imports in append mode, visibility /
+ * color toggles, coordinate rescaling): undoing an "add shape" only removes
+ * that shape and leaves everything else intact.
  */
 export interface Command {
-  execute(): Shape[];
-  undo(): Shape[];
+  execute(shapes: Shape[]): Shape[];
+  undo(shapes: Shape[]): Shape[];
   getDescription(): string;
 }
 
@@ -13,22 +19,19 @@ export interface Command {
  * Command to add a shape
  */
 export class AddShapeCommand implements Command {
-  private shapes: Shape[];
   private shape: Shape;
 
-  constructor(shapes: Shape[], shape: Shape) {
-    this.shapes = shapes;
+  constructor(shape: Shape) {
     this.shape = shape;
   }
 
-  execute(): Shape[] {
-    this.shapes = [...this.shapes, this.shape];
-    return this.shapes;
+  execute(shapes: Shape[]): Shape[] {
+    if (shapes.some(s => s.id === this.shape.id)) return shapes;
+    return [...shapes, this.shape];
   }
 
-  undo(): Shape[] {
-    this.shapes = this.shapes.filter(s => s.id !== this.shape.id);
-    return this.shapes;
+  undo(shapes: Shape[]): Shape[] {
+    return shapes.filter(s => s.id !== this.shape.id);
   }
 
   getDescription(): string {
@@ -37,54 +40,58 @@ export class AddShapeCommand implements Command {
 }
 
 /**
- * Command to remove a shape
+ * Command to remove one or more shapes
  */
-export class RemoveShapeCommand implements Command {
-  private shapes: Shape[];
-  private shapeId: string;
-  private removedShape?: Shape;
-  private removedIndex: number = -1;
+export class RemoveShapesCommand implements Command {
+  private shapeIds: Set<string>;
+  private removed: { shape: Shape; index: number }[] = [];
 
-  constructor(shapes: Shape[], shapeId: string) {
-    this.shapes = shapes;
-    this.shapeId = shapeId;
+  constructor(shapeIds: string[]) {
+    this.shapeIds = new Set(shapeIds);
   }
 
-  execute(): Shape[] {
-    this.removedIndex = this.shapes.findIndex(s => s.id === this.shapeId);
-    if (this.removedIndex !== -1) {
-      this.removedShape = this.shapes[this.removedIndex];
-      this.shapes = this.shapes.filter(s => s.id !== this.shapeId);
-    }
-    return this.shapes;
+  execute(shapes: Shape[]): Shape[] {
+    this.removed = [];
+    const rest: Shape[] = [];
+    shapes.forEach((shape, index) => {
+      if (this.shapeIds.has(shape.id)) {
+        this.removed.push({ shape, index });
+      } else {
+        rest.push(shape);
+      }
+    });
+    return this.removed.length > 0 ? rest : shapes;
   }
 
-  undo(): Shape[] {
-    if (this.removedIndex !== -1 && this.removedShape) {
-      this.shapes = [
-        ...this.shapes.slice(0, this.removedIndex),
-        this.removedShape,
-        ...this.shapes.slice(this.removedIndex)
-      ];
+  undo(shapes: Shape[]): Shape[] {
+    if (this.removed.length === 0) return shapes;
+    const result = [...shapes];
+    // Re-insert at the recorded positions (ascending, so indices stay valid)
+    for (const { shape, index } of this.removed) {
+      result.splice(Math.min(index, result.length), 0, shape);
     }
-    return this.shapes;
+    return result;
   }
 
   getDescription(): string {
-    return `Remove shape`;
+    return this.shapeIds.size === 1 ? 'Remove shape' : `Remove ${this.shapeIds.size} shapes`;
   }
 }
 
 /**
- * Manages undo/redo history
+ * Manages undo/redo history.
+ *
+ * State updates are delivered through `onStateChange` as functional updaters,
+ * so they always apply to the latest shapes array even when several commands
+ * fire between React re-renders (e.g. holding Ctrl+Z).
  */
 export class CommandHistory {
   private history: Command[] = [];
   private currentIndex: number = -1;
   private maxHistorySize: number = 100;
-  private onStateChange?: (shapes: Shape[]) => void;
+  private onStateChange?: (updater: (shapes: Shape[]) => Shape[]) => void;
 
-  setOnStateChange(callback: (shapes: Shape[]) => void): void {
+  setOnStateChange(callback: (updater: (shapes: Shape[]) => Shape[]) => void): void {
     this.onStateChange = callback;
   }
 
@@ -95,11 +102,7 @@ export class CommandHistory {
     // Remove any commands after current index (redo history)
     this.history = this.history.slice(0, this.currentIndex + 1);
 
-    // Execute the command
-    const newShapes = command.execute();
-    if (this.onStateChange) {
-      this.onStateChange(newShapes);
-    }
+    this.onStateChange?.(shapes => command.execute(shapes));
 
     // Add to history
     this.history.push(command);
@@ -120,10 +123,8 @@ export class CommandHistory {
       return false;
     }
 
-    const newShapes = this.history[this.currentIndex].undo();
-    if (this.onStateChange) {
-      this.onStateChange(newShapes);
-    }
+    const command = this.history[this.currentIndex];
+    this.onStateChange?.(shapes => command.undo(shapes));
     this.currentIndex--;
     return true;
   }
@@ -137,10 +138,8 @@ export class CommandHistory {
     }
 
     this.currentIndex++;
-    const newShapes = this.history[this.currentIndex].execute();
-    if (this.onStateChange) {
-      this.onStateChange(newShapes);
-    }
+    const command = this.history[this.currentIndex];
+    this.onStateChange?.(shapes => command.execute(shapes));
     return true;
   }
 

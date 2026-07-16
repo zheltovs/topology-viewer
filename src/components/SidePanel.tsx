@@ -136,6 +136,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
         {activeTab === 'objects' && (
           <ObjectsPanel
             shapes={shapes}
+            selectedShapeIds={selectedShapeIds}
             onToggleVisibility={onToggleVisibility}
             onSelectShape={onSelectShape}
             onDeleteShape={onDeleteShape}

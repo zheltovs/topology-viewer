@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { Layer } from '../models';
 import type { GdsUnits } from '../parsers';
 import { describeGdsUnits } from '../parsers/gdsUnits';
+import { useDialogKeys } from './useDialogKeys';
 
 interface GdsImportDialogProps {
   layers: Layer[];
@@ -14,15 +15,12 @@ interface GdsImportDialogProps {
 
 export function GdsImportDialog({ layers, objectCounts, hasExistingContent, units, onConfirm, onCancel }: GdsImportDialogProps) {
   const unitsDisplay = describeGdsUnits(units);
+  // The dialog is mounted fresh for every import, so the initializer is
+  // enough to select all layers by default
   const [selectedLayerIds, setSelectedLayerIds] = useState<Set<string>>(
     new Set(layers.map(l => l.id))
   );
   const [clearCanvas, setClearCanvas] = useState(true);
-
-  // Select all layers by default when layers change
-  useEffect(() => {
-    setSelectedLayerIds(new Set(layers.map(l => l.id)));
-  }, [layers]);
 
   const handleToggleLayer = (layerId: string) => {
     setSelectedLayerIds(prev => {
@@ -50,6 +48,8 @@ export function GdsImportDialog({ layers, objectCounts, hasExistingContent, unit
 
   const allSelected = selectedLayerIds.size === layers.length;
   const noneSelected = selectedLayerIds.size === 0;
+
+  useDialogKeys(onCancel, noneSelected ? undefined : handleConfirm);
 
   return (
     <div className="gds-import-overlay" onClick={onCancel}>

@@ -1,10 +1,11 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { Canvas, SidePanel, Toolbar, GdsImportDialog, TextImportDialog } from './components';
+import type { CanvasHandle } from './components';
 import { Point, Chain, Contour, createLayer, uniqueLayerName, LAYER_COLORS } from './models';
 import type { Shape, Layer } from './models';
-import { CommandHistory, AddShapeCommand, RemoveShapeCommand } from './services';
+import { CommandHistory, AddShapeCommand, RemoveShapesCommand } from './services';
 import { useKeyboardShortcuts } from './hooks/useKeyboard';
-import { ParserRegistry, Gds2Parser } from './parsers';
+import { DefaultShapeParser, Gds2Parser } from './parsers';
 import type { GdsUnits } from './parsers';
 import './App.css';
 
@@ -30,6 +31,7 @@ interface ParsedTextFile {
   fileName: string;
   layerBaseName: string;
   shapes: Shape[];
+  skippedLines: number;
 }
 
 // State for text import dialog (shapes already parsed, waiting for user decision)
@@ -37,6 +39,12 @@ interface TextImportState {
   isOpen: boolean;
   files: ParsedTextFile[];
 }
+
+// Line-based text formats accepted by the text import path
+const TEXT_EXTENSIONS = /\.(txt|csv)$/i;
+
+// Stateless, safe to share across renders
+const textParser = new DefaultShapeParser();
 
 function App() {
   const [shapes, setShapes] = useState<Shape[]>([]);
@@ -46,15 +54,18 @@ function App() {
   const [tempPoints, setTempPoints] = useState<Point[]>([]);
   const [showIntersections, setShowIntersections] = useState(false);
   const [isComputingIntersections, setIsComputingIntersections] = useState(false);
+  const [intersectionCount, setIntersectionCount] = useState<number | null>(null);
   const [showStats, setShowStats] = useState(false);
   const [commandHistory] = useState(() => {
     const history = new CommandHistory();
+    // setShapes is stable; commands are applied as functional state updates
     history.setOnStateChange(setShapes);
     return history;
   });
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [scaleFactor, setScaleFactor] = useState(1);
+  const canvasRef = useRef<CanvasHandle>(null);
   const [gridSettings, setGridSettings] = useState<GridSettings>({
     enabled: false,
     windowX: 100,
@@ -75,13 +86,31 @@ function App() {
   const [units, setUnits] = useState<GdsUnits | undefined>(undefined);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
-  const parserRegistry = new ParserRegistry();
+
+  // Selection filtered down to shapes that still exist (undo/redo can remove
+  // selected shapes; ids are kept in state and simply ignored while dead)
+  const liveSelectedIds = useMemo(() => {
+    if (selectedShapeIds.length === 0) return selectedShapeIds;
+    const ids = new Set(shapes.map(s => s.id));
+    const next = selectedShapeIds.filter(id => ids.has(id));
+    return next.length === selectedShapeIds.length ? selectedShapeIds : next;
+  }, [shapes, selectedShapeIds]);
 
   // Update undo/redo state
   const updateHistoryState = useCallback(() => {
     setCanUndo(commandHistory.canUndo());
     setCanRedo(commandHistory.canRedo());
   }, [commandHistory]);
+
+  // Fit the canvas view; pass the shapes explicitly when they were just set
+  // in the same tick (the canvas prop still holds the previous list then)
+  const requestFitView = useCallback((shapesToFit?: Shape[]) => {
+    canvasRef.current?.fitView(shapesToFit);
+  }, []);
+
+  const handleFitView = useCallback(() => {
+    requestFitView();
+  }, [requestFitView]);
 
   // Handle adding a point
   const handleAddPoint = useCallback((point: Point) => {
@@ -90,7 +119,9 @@ function App() {
 
   // Finish drawing shape
   const finishDrawing = useCallback(() => {
-    if (tempPoints.length < 2) {
+    // A chain needs 2 points, a contour needs 3 to be a real polygon
+    const minPoints = drawingMode === 'contour' ? 3 : 2;
+    if (tempPoints.length < minPoints) {
       setTempPoints([]);
       return;
     }
@@ -105,11 +136,10 @@ function App() {
       return;
     }
 
-    const command = new AddShapeCommand(shapes, newShape);
-    commandHistory.executeCommand(command);
+    commandHistory.executeCommand(new AddShapeCommand(newShape));
     setTempPoints([]);
     updateHistoryState();
-  }, [tempPoints, drawingMode, shapes, commandHistory, updateHistoryState]);
+  }, [tempPoints, drawingMode, commandHistory, updateHistoryState]);
 
   // Keyboard handlers - memoized to prevent hook dependency recreation
   const handleUndo = useCallback(() => {
@@ -124,11 +154,15 @@ function App() {
     }
   }, [commandHistory, updateHistoryState]);
 
+  // Esc finishes the current shape; a second Esc (no points) leaves drawing mode
   const handleEscape = useCallback(() => {
-    if (drawingMode) {
+    if (!drawingMode) return;
+    if (tempPoints.length > 0) {
       finishDrawing();
+    } else {
+      setDrawingMode(null);
     }
-  }, [drawingMode, finishDrawing]);
+  }, [drawingMode, tempPoints.length, finishDrawing]);
 
   const handleChainMode = useCallback(() => {
     setDrawingMode(prev => prev === 'chain' ? null : 'chain');
@@ -144,6 +178,14 @@ function App() {
     setShowStats(prev => !prev);
   }, []);
 
+  // Delete all currently selected shapes (one undoable step)
+  const handleDeleteSelected = useCallback(() => {
+    if (liveSelectedIds.length === 0) return;
+    commandHistory.executeCommand(new RemoveShapesCommand(liveSelectedIds));
+    setSelectedShapeIds([]);
+    updateHistoryState();
+  }, [liveSelectedIds, commandHistory, updateHistoryState]);
+
   // Register keyboard shortcuts
   useKeyboardShortcuts({
     onUndo: handleUndo,
@@ -151,7 +193,9 @@ function App() {
     onEscape: handleEscape,
     onChainMode: handleChainMode,
     onContourMode: handleContourMode,
-    onToggleStats: handleToggleStats
+    onToggleStats: handleToggleStats,
+    onFitView: handleFitView,
+    onDeleteSelected: handleDeleteSelected
   });
 
   // Toggle shape visibility
@@ -163,36 +207,52 @@ function App() {
 
   // Select shape (toggle if already selected)
   const handleSelectShape = useCallback((shapeId: string) => {
-    setSelectedShapeIds(prevIds => {
-      const isAlreadySelected = prevIds.includes(shapeId);
-      if (isAlreadySelected) {
-        setShapes(prev => prev.map(s => ({ ...s, selected: false })));
-        return [];
-      } else {
-        setShapes(prev => prev.map(s => s.id === shapeId ? { ...s, selected: true } : { ...s, selected: false }));
-        return [shapeId];
-      }
-    });
+    setSelectedShapeIds(prev => prev.includes(shapeId) ? [] : [shapeId]);
   }, []);
 
   // Select multiple shapes (for layers panel)
   const handleSelectShapes = useCallback((shapeIds: string[]) => {
-    setShapes(prev => prev.map(s => ({ ...s, selected: shapeIds.includes(s.id) })));
     setSelectedShapeIds(shapeIds);
   }, []);
 
   // Delete shape
   const handleDeleteShape = useCallback((shapeId: string) => {
-    const command = new RemoveShapeCommand(shapes, shapeId);
-    commandHistory.executeCommand(command);
+    commandHistory.executeCommand(new RemoveShapesCommand([shapeId]));
+    setSelectedShapeIds(prev => prev.includes(shapeId) ? prev.filter(id => id !== shapeId) : prev);
     updateHistoryState();
-  }, [shapes, commandHistory, updateHistoryState]);
+  }, [commandHistory, updateHistoryState]);
 
   // Change shape color
   const handleChangeColor = useCallback((shapeId: string, color: string) => {
     setShapes(prev => prev.map(s =>
       s.id === shapeId ? { ...s, color } : s
     ));
+  }, []);
+
+  // Apply coordinate scale divisor to all shapes
+  const scaleFactorRef = useRef(1);
+  const handleApplyScale = useCallback((newDivisor: number) => {
+    const oldDivisor = scaleFactorRef.current;
+    const ratio = oldDivisor / newDivisor;
+    scaleFactorRef.current = newDivisor;
+    setScaleFactor(newDivisor);
+    const rescaled = shapes.map(shape => ({
+      ...shape,
+      points: shape.points.map(p => new Point(p.x * ratio, p.y * ratio)),
+    }));
+    setShapes(rescaled);
+    requestFitView(rescaled);
+  }, [shapes, requestFitView]);
+
+  // Divides shape points in place by the current display divisor, so appended
+  // raw coordinates land in the same scale as the already-rescaled scene
+  const applyCurrentScale = useCallback((importedShapes: Shape[]) => {
+    const divisor = scaleFactorRef.current;
+    if (divisor === 1) return importedShapes;
+    for (const shape of importedShapes) {
+      shape.points = shape.points.map(p => new Point(p.x / divisor, p.y / divisor));
+    }
+    return importedShapes;
   }, []);
 
   // Apply parsed text files: each file goes into its own new layer, optionally clearing the canvas
@@ -220,57 +280,65 @@ function App() {
 
     if (clearCanvas) {
       commandHistory.clear();
+      scaleFactorRef.current = 1;
+      setScaleFactor(1);
       setShapes(newShapes);
       setLayers(newLayers);
       setUnits(undefined);
       setSelectedShapeIds([]);
       updateHistoryState();
+      requestFitView(newShapes);
     } else {
+      applyCurrentScale(newShapes);
       setLayers(prev => [...prev, ...newLayers]);
       setShapes(prev => [...prev, ...newShapes]);
       setSelectedShapeIds([]);
+      requestFitView([...shapes, ...newShapes]);
     }
-  }, [layers, commandHistory, updateHistoryState]);
+  }, [layers, shapes, commandHistory, updateHistoryState, applyCurrentScale, requestFitView]);
 
-  // Parse a text file into shapes (one shape per line)
+  // Parse a text file into shapes (one shape per line). Invalid lines are
+  // skipped and counted instead of failing the whole file.
   const parseTextFile = useCallback(async (file: File): Promise<ParsedTextFile> => {
     const content = await file.text();
-    const lines = content.trim().split('\n');
-    const parser = parserRegistry.getParser();
+    const lines = content.split('\n');
     const newShapes: Shape[] = [];
+    let skippedLines = 0;
 
-    for (const line of lines) {
-      if (!line.trim()) continue;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
 
-      const points = parser.parsePoints(line.trim());
-
-      if (points.length < 2) {
-        console.warn('Skipping line with less than 2 points:', line);
+      let points: Point[];
+      try {
+        points = textParser.parsePoints(line);
+      } catch (error) {
+        skippedLines++;
+        console.warn(`${file.name}:${i + 1}: line skipped — ${error instanceof Error ? error.message : error}`);
         continue;
       }
 
-      let newShape: Shape;
-      const firstPoint = points[0];
-      const lastPoint = points[points.length - 1];
-
-      if (firstPoint.equals(lastPoint)) {
-        newShape = new Contour(points);
-      } else {
-        newShape = new Chain(points);
+      if (points.length < 2) {
+        skippedLines++;
+        console.warn(`${file.name}:${i + 1}: line skipped — less than 2 points`);
+        continue;
       }
 
-      newShapes.push(newShape);
+      const firstPoint = points[0];
+      const lastPoint = points[points.length - 1];
+      newShapes.push(firstPoint.equals(lastPoint) ? new Contour(points) : new Chain(points));
     }
 
     return {
       fileName: file.name,
       layerBaseName: file.name.replace(/\.[^.]+$/, '') || 'Imported',
-      shapes: newShapes
+      shapes: newShapes,
+      skippedLines
     };
-  }, [parserRegistry]);
+  }, []);
 
   // Process imported files (shared by click-import and drag-and-drop).
-  // A single file may be GDS or text; multiple files are supported for .txt only.
+  // A single file may be GDS or text; multiple files are supported for text only.
   const handleFiles = useCallback(async (inputFiles: File[]) => {
     try {
       if (inputFiles.length === 0) return;
@@ -296,27 +364,38 @@ function App() {
         }
       }
 
-      // Multiple files: only .txt is supported
+      // Multiple files: only line-based text formats are supported
       let textFiles = inputFiles;
       if (inputFiles.length > 1) {
-        textFiles = inputFiles.filter(f => f.name.toLowerCase().endsWith('.txt'));
+        textFiles = inputFiles.filter(f => TEXT_EXTENSIONS.test(f.name));
         const skipped = inputFiles.filter(f => !textFiles.includes(f));
         if (skipped.length > 0) {
-          alert(`Multiple file import supports .txt only. Skipped: ${skipped.map(f => f.name).join(', ')}`);
+          alert(`Multiple file import supports .txt/.csv only. Skipped: ${skipped.map(f => f.name).join(', ')}`);
         }
         if (textFiles.length === 0) return;
       }
 
-      const parsedFiles = (await Promise.all(textFiles.map(parseTextFile)))
-        .filter(f => f.shapes.length > 0);
+      const parsedFiles = await Promise.all(textFiles.map(parseTextFile));
+      const totalShapes = parsedFiles.reduce((sum, f) => sum + f.shapes.length, 0);
+      const totalSkipped = parsedFiles.reduce((sum, f) => sum + f.skippedLines, 0);
 
-      if (parsedFiles.length === 0) return;
+      if (totalShapes === 0) {
+        alert(totalSkipped > 0
+          ? `Nothing imported: ${totalSkipped} invalid line(s) skipped. See the browser console for details.`
+          : 'Nothing imported: no shapes found in the selected file(s).');
+        return;
+      }
+      if (totalSkipped > 0) {
+        alert(`Imported with warnings: ${totalSkipped} invalid line(s) skipped. See the browser console for details.`);
+      }
+
+      const nonEmptyFiles = parsedFiles.filter(f => f.shapes.length > 0);
 
       if (shapes.length > 0 || layers.length > 0) {
         // Existing content: ask the user whether to clear the canvas
-        setTextImportState({ isOpen: true, files: parsedFiles });
+        setTextImportState({ isOpen: true, files: nonEmptyFiles });
       } else {
-        applyTextImport(parsedFiles, true);
+        applyTextImport(nonEmptyFiles, true);
       }
     } catch (error) {
       alert(`Error reading file: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -332,19 +411,6 @@ function App() {
   // Handle text import dialog cancellation
   const handleTextImportCancel = useCallback(() => {
     setTextImportState({ isOpen: false, files: [] });
-  }, []);
-
-  // Apply coordinate scale divisor to all shapes
-  const scaleFactorRef = useRef(1);
-  const handleApplyScale = useCallback((newDivisor: number) => {
-    const oldDivisor = scaleFactorRef.current;
-    const ratio = oldDivisor / newDivisor;
-    scaleFactorRef.current = newDivisor;
-    setScaleFactor(newDivisor);
-    setShapes(prev => prev.map(shape => ({
-      ...shape,
-      points: shape.points.map(p => new Point(p.x * ratio, p.y * ratio)),
-    })));
   }, []);
 
   // Handle import from file (button click)
@@ -407,12 +473,16 @@ function App() {
         setUnits(result.units);
         if (clearCanvas) {
           commandHistory.clear();
+          scaleFactorRef.current = 1;
+          setScaleFactor(1);
           setShapes(result.shapes);
           setLayers(result.layers);
           setSelectedShapeIds([]);
           updateHistoryState();
+          requestFitView(result.shapes);
         } else {
           // Append mode: all new layers are independent — just ensure unique names
+          applyCurrentScale(result.shapes);
           setLayers(prevLayers => {
             const existingNames = new Set(prevLayers.map(l => l.name));
 
@@ -426,14 +496,17 @@ function App() {
           });
           setShapes(prevShapes => [...prevShapes, ...result.shapes]);
           setSelectedShapeIds([]);
+          requestFitView([...shapes, ...result.shapes]);
         }
+      } else {
+        alert('No shapes found on the selected layers.');
       }
     } catch (error) {
       alert(`Error importing GDS: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
 
     setGdsImportState({ isOpen: false, layers: [], objectCounts: new Map(), fileBuffer: null });
-  }, [gdsImportState.fileBuffer, gdsImportState.layers, commandHistory, updateHistoryState]);
+  }, [gdsImportState.fileBuffer, gdsImportState.layers, shapes, commandHistory, updateHistoryState, applyCurrentScale, requestFitView]);
 
   // Handle GDS import cancellation
   const handleGdsImportCancel = useCallback(() => {
@@ -519,19 +592,26 @@ function App() {
   }, []);
 
   const handleToggleLayerVisibility = useCallback((layerId: string) => {
-    setLayers(prev => prev.map(layer =>
-      layer.id === layerId ? { ...layer, visible: !layer.visible } : layer
-    ));
+    const layer = layers.find(l => l.id === layerId);
+    const newVisible = layer ? !layer.visible : true;
 
-    // Also toggle visibility of all shapes in this layer
-    setShapes(prev => {
-      const layer = layers.find(l => l.id === layerId);
-      const newVisible = layer ? !layer.visible : true;
-      return prev.map(shape =>
-        shape.layerId === layerId ? { ...shape, visible: newVisible } : shape
-      );
-    });
+    setLayers(prev => prev.map(l =>
+      l.id === layerId ? { ...l, visible: newVisible } : l
+    ));
+    setShapes(prev => prev.map(shape =>
+      shape.layerId === layerId ? { ...shape, visible: newVisible } : shape
+    ));
   }, [layers]);
+
+  // Intersection state relayed from the canvas to the toolbar
+  const handleIntersectionComputingChange = useCallback((computing: boolean) => {
+    setIsComputingIntersections(computing);
+    if (computing) setIntersectionCount(null);
+  }, []);
+
+  const handleIntersectionsFound = useCallback((count: number) => {
+    setIntersectionCount(count);
+  }, []);
 
   return (
     <div className="app">
@@ -550,6 +630,8 @@ function App() {
         showIntersections={showIntersections}
         onToggleIntersections={() => setShowIntersections(!showIntersections)}
         isComputingIntersections={isComputingIntersections}
+        intersectionCount={intersectionCount}
+        onFitView={handleFitView}
         scaleFactor={scaleFactor}
         onApplyScale={handleApplyScale}
         gridSettings={gridSettings}
@@ -578,13 +660,16 @@ function App() {
             </div>
           )}
           <Canvas
+            ref={canvasRef}
             shapes={shapes}
+            selectedShapeIds={liveSelectedIds}
             onAddPoint={handleAddPoint}
             drawingMode={drawingMode}
             tempPoints={tempPoints}
             showIntersections={showIntersections}
             showStats={showStats}
-            onIntersectionComputingChange={setIsComputingIntersections}
+            onIntersectionComputingChange={handleIntersectionComputingChange}
+            onIntersectionsFound={handleIntersectionsFound}
             gridSettings={gridSettings}
           />
         </div>
@@ -596,7 +681,7 @@ function App() {
           onDeleteShape={handleDeleteShape}
           onChangeColor={handleChangeColor}
           layers={layers}
-          selectedShapeIds={selectedShapeIds}
+          selectedShapeIds={liveSelectedIds}
           onLayerCreate={handleLayerCreate}
           onLayerUpdate={handleLayerUpdate}
           onLayerDelete={handleLayerDelete}

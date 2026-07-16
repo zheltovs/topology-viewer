@@ -57,8 +57,6 @@ const DataType = {
 } as const;
 
 const RECORD_HEADER_SIZE = 4;
-/** A single GDSII XY record holds at most 200 coordinate pairs. */
-const MAX_XY_PAIRS = 200;
 /** Safety cap so a pathological hierarchy (huge AREF / deep recursion) cannot OOM the tab. */
 const MAX_FLATTENED_SHAPES = 2_000_000;
 
@@ -185,17 +183,23 @@ function placementMatrix(p: Placement): Xform {
   };
 }
 
-/** Reads an XY record's coordinate pairs, accepting both legal Int4 and Int2 encodings. */
+/**
+ * Reads an XY record's coordinate pairs, accepting both legal Int4 and Int2
+ * encodings. The pair count is bounded only by the record's own data length
+ * (a 16-bit record length allows up to 8191 Int4 pairs): the old Calma spec
+ * recommends at most 200 vertices per element, but files produced by modern
+ * tools routinely exceed that, and truncating would silently corrupt geometry.
+ */
 function readXy(view: DataView, offset: number, length: number, dataType: number): Point[] {
   const pts: Point[] = [];
   if (dataType === DataType.Int4) {
-    const pairs = Math.min(Math.floor(length / 8), MAX_XY_PAIRS);
+    const pairs = Math.floor(length / 8);
     for (let i = 0; i < pairs; i++) {
       const base = offset + i * 8;
       pts.push(new Point(view.getInt32(base, false), view.getInt32(base + 4, false)));
     }
   } else if (dataType === DataType.Int2) {
-    const pairs = Math.min(Math.floor(length / 4), MAX_XY_PAIRS);
+    const pairs = Math.floor(length / 4);
     for (let i = 0; i < pairs; i++) {
       const base = offset + i * 4;
       pts.push(new Point(view.getInt16(base, false), view.getInt16(base + 2, false)));

@@ -4,7 +4,7 @@ import { ShapeType } from '../models';
 import { tokens } from '../styles';
 
 // Virtualization constants
-const ITEM_HEIGHT = 52; // Height of each item in pixels (including margin)
+const ITEM_HEIGHT = 48; // Row pitch in px: 44px item + 4px margin (must match the CSS)
 const OVERSCAN = 5; // Number of items to render outside viewport
 
 // Preset colors for shapes
@@ -21,6 +21,7 @@ const SHAPE_COLORS = [
 
 interface ObjectsPanelProps {
   shapes: Shape[];
+  selectedShapeIds: string[];
   onToggleVisibility: (shapeId: string) => void;
   onSelectShape: (shapeId: string) => void;
   onDeleteShape: (shapeId: string) => void;
@@ -65,6 +66,7 @@ const TrashIcon = () => (
 interface ShapeItemProps {
   shape: Shape;
   index: number;
+  isSelected: boolean;
   onToggleVisibility: (shapeId: string) => void;
   onSelectShape: (shapeId: string) => void;
   onDeleteShape: (shapeId: string) => void;
@@ -74,6 +76,7 @@ interface ShapeItemProps {
 const ShapeItem = memo<ShapeItemProps>(({
   shape,
   index,
+  isSelected,
   onToggleVisibility,
   onSelectShape,
   onDeleteShape,
@@ -81,11 +84,7 @@ const ShapeItem = memo<ShapeItemProps>(({
 }) => {
   return (
     <div
-      key={`${shape.id}-${shape.selected}`}
-      style={{
-        ...styles.item,
-        ...(shape.selected ? styles.itemSelected : {}),
-      }}
+      className={`object-item ${isSelected ? 'selected' : ''}`}
       onClick={() => onSelectShape(shape.id)}
     >
       <button
@@ -146,7 +145,7 @@ const ShapeItem = memo<ShapeItemProps>(({
   // Custom comparison: only re-render if these specific properties changed
   return (
     prevProps.shape.id === nextProps.shape.id &&
-    prevProps.shape.selected === nextProps.shape.selected &&
+    prevProps.isSelected === nextProps.isSelected &&
     prevProps.shape.visible === nextProps.shape.visible &&
     prevProps.shape.color === nextProps.shape.color &&
     prevProps.shape.layerId === nextProps.shape.layerId &&
@@ -159,6 +158,7 @@ ShapeItem.displayName = 'ShapeItem';
 
 export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
   shapes,
+  selectedShapeIds,
   onToggleVisibility,
   onSelectShape,
   onDeleteShape,
@@ -173,6 +173,8 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
   const [showColorPicker, setShowColorPicker] = useState<string | null>(null);
   const [colorPickerPosition, setColorPickerPosition] = useState<{ top: number; left: number } | null>(null);
   const colorPickerRef = useRef<HTMLDivElement>(null);
+
+  const selectedSet = useMemo(() => new Set(selectedShapeIds), [selectedShapeIds]);
 
   // Close color picker when clicking outside
   useEffect(() => {
@@ -298,7 +300,7 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
               </div>
               <div style={styles.shortcutItem}>
                 <kbd style={styles.kbd}>Esc</kbd>
-                <span>Finish drawing</span>
+                <span>Finish / exit drawing</span>
               </div>
               <div style={styles.shortcutItem}>
                 <kbd style={styles.kbd}>Ctrl+Z</kbd>
@@ -308,11 +310,23 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
                 <kbd style={styles.kbd}>Ctrl+Y</kbd>
                 <span>Redo</span>
               </div>
+              <div style={styles.shortcutItem}>
+                <kbd style={styles.kbd}>Home</kbd>
+                <span>Fit view to shapes</span>
+              </div>
+              <div style={styles.shortcutItem}>
+                <kbd style={styles.kbd}>Del</kbd>
+                <span>Delete selected</span>
+              </div>
+              <div style={styles.shortcutItem}>
+                <kbd style={styles.kbd}>Ctrl+I</kbd>
+                <span>Toggle stats overlay</span>
+              </div>
             </div>
 
             <div style={styles.tip}>
               <div style={styles.tipIcon}>💡</div>
-              <div style={styles.tipText}>Use mouse wheel to zoom, drag to pan</div>
+              <div style={styles.tipText}>Mouse wheel zooms, drag pans the canvas</div>
             </div>
           </div>
         ) : (
@@ -331,6 +345,7 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
                   key={shape.id}
                   shape={shape}
                   index={startIndex + localIndex}
+                  isSelected={selectedSet.has(shape.id)}
                   onToggleVisibility={onToggleVisibility}
                   onSelectShape={onSelectShape}
                   onDeleteShape={onDeleteShape}
@@ -373,7 +388,7 @@ export const ObjectsPanel: React.FC<ObjectsPanelProps> = ({
       {shapes.length > 0 && (
         <div style={styles.footer}>
           <span style={styles.footerText}>
-            Use <kbd>Ctrl+Z</kbd> to undo
+            <kbd>Del</kbd> removes selected · <kbd>Ctrl+Z</kbd> undo
           </span>
         </div>
       )}
@@ -500,24 +515,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: tokens.typography.fontSize.sm,
     color: tokens.colors.text.secondary,
   },
-  item: {
-    display: 'flex',
-    alignItems: 'center',
-    padding: `${tokens.spacing.sm} ${tokens.spacing.md}`,
-    marginBottom: tokens.spacing.xs,
-    backgroundColor: tokens.colors.bg.tertiary,
-    borderRadius: tokens.radius.md,
-    border: `1px solid ${tokens.colors.border.subtle}`,
-    cursor: 'pointer',
-    transition: `all ${tokens.transitions.normal}`,
-    outline: 'none',
-    height: '44px',
-  },
-  itemSelected: {
-    backgroundColor: tokens.colors.bg.elevated,
-    borderColor: tokens.colors.accent.primary,
-    boxShadow: `0 0 0 1px ${tokens.colors.accent.primary}`,
-  },
   itemIconBtn: {
     display: 'flex',
     alignItems: 'center',
@@ -553,52 +550,10 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: tokens.colors.text.tertiary,
     whiteSpace: 'nowrap',
   },
-  colorPicker: {
-    display: 'flex',
-    gap: '4px',
-    marginTop: tokens.spacing.xs,
-  },
-  colorButton: {
-    width: '14px',
-    height: '14px',
-    borderRadius: '3px',
-    border: '1px solid rgba(255, 255, 255, 0.15)',
-    cursor: 'pointer',
-    transition: `all ${tokens.transitions.fast}`,
-    padding: 0,
-  },
-  colorButtonActive: {
-    boxShadow: '0 0 0 2px rgba(255, 255, 255, 0.3)',
-    transform: 'scale(1.15)',
-  },
-  colorButtonDisabled: {
-    opacity: 0.3,
-    cursor: 'not-allowed',
-  },
   itemActions: {
     display: 'flex',
     gap: tokens.spacing.xs,
     marginRight: tokens.spacing.xs,
-  },
-  actionButton: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '32px',
-    height: '32px',
-    background: 'none',
-    border: 'none',
-    borderRadius: tokens.radius.md,
-    color: tokens.colors.text.secondary,
-    cursor: 'pointer',
-    transition: `all ${tokens.transitions.fast}`,
-  },
-  actionButtonMuted: {
-    color: tokens.colors.text.tertiary,
-    opacity: 0.5,
-  },
-  deleteButton: {
-    color: tokens.colors.text.tertiary,
   },
   footer: {
     padding: tokens.spacing.md,

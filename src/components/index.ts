@@ -1,4 +1,5 @@
 export { Canvas } from './Canvas';
+export type { CanvasHandle } from './Canvas';
 export { ObjectsPanel } from './ObjectsPanel';
 export { LayersPanel } from './LayersPanel';
 export { SidePanel } from './SidePanel';

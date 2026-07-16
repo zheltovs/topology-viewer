@@ -1,5 +1,20 @@
 import { useEffect, useRef } from 'react';
 
+/**
+ * True when the key event originates from a text-editing control, where app
+ * shortcuts must not fire (Ctrl+Z should undo the text, Delete edits text, …).
+ */
+function isTextEditingTarget(e: KeyboardEvent): boolean {
+  const target = e.target;
+  if (target instanceof HTMLTextAreaElement) return true;
+  if (target instanceof HTMLElement && target.isContentEditable) return true;
+  if (target instanceof HTMLInputElement) {
+    // Checkboxes / radios / buttons don't consume typing shortcuts
+    return !['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file'].includes(target.type);
+  }
+  return false;
+}
+
 export const useKeyboardShortcuts = (handlers: {
   onUndo?: () => void;
   onRedo?: () => void;
@@ -7,14 +22,21 @@ export const useKeyboardShortcuts = (handlers: {
   onChainMode?: () => void;
   onContourMode?: () => void;
   onToggleStats?: () => void;
+  onFitView?: () => void;
+  onDeleteSelected?: () => void;
 }) => {
-  // Use refs to always have access to latest handlers without causing effect re-runs
+  // Use a ref to always have access to latest handlers without causing effect re-runs
   const handlersRef = useRef(handlers);
-  handlersRef.current = handlers;
+  useEffect(() => {
+    handlersRef.current = handlers;
+  });
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const h = handlersRef.current;
+
+      // Let text fields keep their native editing shortcuts
+      if (isTextEditingTarget(e)) return;
 
       // Ctrl+Z - Undo (use code instead of key for layout independence)
       if (e.ctrlKey && e.code === 'KeyZ' && !e.shiftKey && h.onUndo) {
@@ -52,6 +74,18 @@ export const useKeyboardShortcuts = (handlers: {
       if (e.ctrlKey && e.code === 'KeyI' && !e.shiftKey && h.onToggleStats) {
         e.preventDefault();
         h.onToggleStats();
+      }
+
+      // Home - Fit view to shapes
+      if (e.code === 'Home' && !e.ctrlKey && !e.altKey && !e.shiftKey && h.onFitView) {
+        e.preventDefault();
+        h.onFitView();
+      }
+
+      // Delete - Remove selected shapes
+      if (e.code === 'Delete' && !e.ctrlKey && !e.altKey && !e.shiftKey && h.onDeleteSelected) {
+        e.preventDefault();
+        h.onDeleteSelected();
       }
     };
 

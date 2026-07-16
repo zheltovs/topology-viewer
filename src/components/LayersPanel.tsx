@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import type { Shape, Layer } from '../models';
-import { ShapeType, LAYER_COLORS, createLayer, DEFAULT_LAYER_ID } from '../models';
+import { ShapeType, LAYER_COLORS, createLayer, uniqueLayerName, DEFAULT_LAYER_ID } from '../models';
 import { tokens } from '../styles';
 
 interface LayersPanelProps {
@@ -130,8 +130,9 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   const [editingName, setEditingName] = useState('');
   const [showColorPicker, setShowColorPicker] = useState<string | null>(null);
   const [colorPickerPosition, setColorPickerPosition] = useState<{ top: number; left: number } | null>(null);
-  const [assignMode, setAssignMode] = useState<string | null>(null); // layerId for assigning selected shapes
+  const [assignMode, setAssignMode] = useState(false); // "Assign to layer" dropdown open?
   const colorPickerRef = useRef<HTMLDivElement>(null);
+  const assignDropdownRef = useRef<HTMLDivElement>(null);
 
   // Close color picker when clicking outside
   useEffect(() => {
@@ -147,6 +148,20 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [showColorPicker]);
+
+  // Close the assign dropdown when clicking outside
+  useEffect(() => {
+    if (!assignMode) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (assignDropdownRef.current && !assignDropdownRef.current.contains(event.target as Node)) {
+        setAssignMode(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [assignMode]);
 
   // Get shapes for a specific layer
   const getShapesForLayer = useCallback((layerId: string) => {
@@ -190,10 +205,14 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     setEditingName('');
   };
 
-  // Create new layer
+  // Create new layer (name made unique against existing layers)
   const handleCreateLayer = () => {
     const colorIndex = layers.length % LAYER_COLORS.length;
-    const layer = createLayer(`New Layer ${layers.length + 1}`, LAYER_COLORS[colorIndex]);
+    const existingNames = new Set(layers.map(l => l.name));
+    const layer = createLayer(
+      uniqueLayerName(`New Layer ${layers.length + 1}`, existingNames),
+      LAYER_COLORS[colorIndex]
+    );
     onLayerCreate(layer);
     setExpandedLayers(prev => new Set([...prev, layer.id]));
   };
@@ -259,7 +278,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   const handleAssignSelected = (layerId: string) => {
     if (selectedShapeIds.length > 0) {
       onAssignShapesToLayer(selectedShapeIds, layerId);
-      setAssignMode(null);
+      setAssignMode(false);
     }
   };
 
@@ -294,6 +313,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
         <div style={styles.headerActions}>
           {layers.length > 0 && (
             <button
+              className="add-button"
               style={styles.toggleAllBtn}
               onClick={handleToggleAllLayers}
               title="Toggle all layers visibility"
@@ -302,6 +322,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
             </button>
           )}
           <button
+            className="add-button"
             style={styles.addButton}
             onClick={handleCreateLayer}
             title="Create new layer"
@@ -318,10 +339,11 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
             {selectedShapeIds.length} selected
           </span>
           <div style={styles.selectionActions}>
-            <div style={styles.assignDropdown}>
+            <div style={styles.assignDropdown} ref={assignDropdownRef}>
               <button
+                className="add-button"
                 style={styles.actionBtn}
-                onClick={() => setAssignMode(assignMode ? null : 'open')}
+                onClick={() => setAssignMode(prev => !prev)}
                 title="Assign to layer"
               >
                 <MoveIcon />
@@ -332,6 +354,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                   {layers.map(layer => (
                     <button
                       key={layer.id}
+                      className="dropdown-item"
                       style={styles.dropdownItem}
                       onClick={() => handleAssignSelected(layer.id)}
                     >
@@ -346,6 +369,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
               )}
             </div>
             <button
+              className="add-button"
               style={styles.actionBtn}
               onClick={handleRemoveSelectedFromLayers}
               title="Remove from layer"
@@ -371,7 +395,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
             <div style={styles.emptyText}>
               Create layers to organize your shapes. Import from GDS2 to auto-create layers.
             </div>
-            <button style={styles.createButton} onClick={handleCreateLayer}>
+            <button className="create-button" style={styles.createButton} onClick={handleCreateLayer}>
               <PlusIcon />
               <span>Create Layer</span>
             </button>
@@ -404,6 +428,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                 {/* Color picker */}
                 <div style={styles.colorPickerWrapper}>
                   <button
+                    className="layer-color-btn"
                     style={{ ...styles.colorBtn, backgroundColor: layer.color }}
                     onClick={(e) => handleColorPickerOpen(layer.id, e)}
                     title="Change layer color"
@@ -452,6 +477,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                     {layer.visible ? <EyeIcon /> : <EyeOffIcon />}
                   </button>
                   <button
+                    className="layer-icon-btn"
                     style={styles.iconBtn}
                     onClick={() => startEditing(layer)}
                     title="Rename layer"
@@ -460,6 +486,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                   </button>
                   {layer.id !== DEFAULT_LAYER_ID && (
                     <button
+                      className="layer-delete-btn"
                       style={{ ...styles.iconBtn, ...styles.deleteBtn }}
                       onClick={() => onLayerDelete(layer.id)}
                       title="Delete layer"
@@ -478,6 +505,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                       No shapes in this layer.
                       {selectedShapeIds.length > 0 && (
                         <button
+                          className="assign-here-btn"
                           style={styles.assignHereBtn}
                           onClick={() => handleAssignSelected(layer.id)}
                         >
@@ -499,6 +527,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                           </span>
                         )}
                         <button
+                          className="select-all-btn"
                           style={styles.selectAllBtn}
                           onClick={() => selectAllInLayer(layer.id)}
                         >
@@ -509,6 +538,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                         {layerShapes.map((shape, idx) => (
                           <div
                             key={shape.id}
+                            className="shape-item"
                             style={{
                               ...styles.shapeItem,
                               ...(selectedShapeIds.includes(shape.id) ? styles.shapeItemSelected : {})
@@ -565,6 +595,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                   {unassignedShapes.map((shape, idx) => (
                     <div
                       key={shape.id}
+                      className="shape-item"
                       style={{
                         ...styles.shapeItem,
                         ...(selectedShapeIds.includes(shape.id) ? styles.shapeItemSelected : {})
@@ -911,6 +942,11 @@ const styles: { [key: string]: React.CSSProperties } = {
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
+  },
+  layerMeta: {
+    fontSize: tokens.typography.fontSize.xs,
+    color: tokens.colors.text.tertiary,
+    whiteSpace: 'nowrap',
   },
   layerStat: {
     display: 'inline-flex',

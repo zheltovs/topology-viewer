@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { tokens } from '../styles';
 import type { GridSettings } from '../App';
 import type { GdsUnits } from '../parsers';
@@ -16,6 +16,8 @@ interface ToolbarProps {
   showIntersections?: boolean;
   onToggleIntersections?: () => void;
   isComputingIntersections?: boolean;
+  intersectionCount?: number | null;
+  onFitView: () => void;
   scaleFactor: number;
   onApplyScale: (divisor: number) => void;
   gridSettings: GridSettings;
@@ -81,6 +83,23 @@ const IntersectionIcon = () => (
   </svg>
 );
 
+const FitIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+    <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+    <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+    <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+    <rect x="9" y="9" width="6" height="6" />
+  </svg>
+);
+
+const GearIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+  </svg>
+);
+
 export const Toolbar: React.FC<ToolbarProps> = ({
   drawingMode,
   onSetDrawingMode,
@@ -93,13 +112,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   showIntersections = false,
   onToggleIntersections,
   isComputingIntersections = false,
+  intersectionCount = null,
+  onFitView,
   scaleFactor,
   onApplyScale,
   gridSettings,
   onGridSettingsChange,
   units,
 }) => {
-  const [scaleInput, setScaleInput] = useState(String(scaleFactor));
+  // null = not editing; the input then mirrors the current scaleFactor, so an
+  // external reset (e.g. import with "clear canvas") shows up immediately
+  const [scaleInput, setScaleInput] = useState<string | null>(null);
+  const scaleValue = scaleInput ?? String(scaleFactor);
   const unitsDisplay = describeGdsUnits(units);
 
   // Local string state for grid inputs
@@ -108,11 +132,36 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const [gsX, setGsX] = useState(gridSettings.stepX > 0 ? String(gridSettings.stepX) : '');
   const [gsY, setGsY] = useState(gridSettings.stepY > 0 ? String(gridSettings.stepY) : '');
 
+  // Grid settings popover
+  const [showGridPopover, setShowGridPopover] = useState(false);
+  const gridPopoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showGridPopover) return;
+
+    const handleMouseDown = (event: MouseEvent) => {
+      if (gridPopoverRef.current && !gridPopoverRef.current.contains(event.target as Node)) {
+        setShowGridPopover(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowGridPopover(false);
+    };
+
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showGridPopover]);
+
   const applyScale = () => {
-    const val = parseFloat(scaleInput);
+    const val = parseFloat(scaleValue);
     if (!isNaN(val) && val > 0 && val !== scaleFactor) {
       onApplyScale(val);
     }
+    setScaleInput(null);
   };
 
   const handleScaleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -124,6 +173,25 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     const numVal = isNaN(val) || val < 0 ? 0 : val;
     onGridSettingsChange({ ...gridSettings, [field]: numVal });
   };
+
+  const gridField = (
+    field: 'windowX' | 'windowY' | 'stepX' | 'stepY',
+    value: string,
+    setValue: (v: string) => void,
+    placeholder: string,
+    title: string
+  ) => (
+    <input
+      type="number" min="0" step="any"
+      value={value}
+      placeholder={placeholder}
+      onChange={e => setValue(e.target.value)}
+      onBlur={() => applyGridField(field, value)}
+      onKeyDown={e => { if (e.key === 'Enter') applyGridField(field, value); }}
+      style={styles.gridInput}
+      title={title}
+    />
+  );
 
   return (
     <div style={styles.toolbar}>
@@ -143,7 +211,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
       {/* Drawing Tools */}
       <div style={styles.toolGroup}>
-        <span style={styles.groupLabel}>Draw</span>
         <div style={styles.buttonGroup}>
           <button
             className={`toolbar-btn ${drawingMode === 'chain' ? 'active' : ''}`}
@@ -169,7 +236,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
       {/* History */}
       <div style={styles.toolGroup}>
-        <span style={styles.groupLabel}>History</span>
         <div style={styles.buttonGroup}>
           <button
             className="toolbar-icon-btn"
@@ -194,10 +260,16 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       <div style={styles.divider} />
 
       {/* View Controls */}
-      {onToggleIntersections && (
-        <div style={styles.toolGroup}>
-          <span style={styles.groupLabel}>View</span>
-          <div style={styles.buttonGroup}>
+      <div style={styles.toolGroup}>
+        <div style={styles.buttonGroup}>
+          <button
+            className="toolbar-icon-btn"
+            onClick={onFitView}
+            title="Fit view to shapes (Home)"
+          >
+            <FitIcon />
+          </button>
+          {onToggleIntersections && (
             <button
               className={`toolbar-btn ${showIntersections ? 'active-intersections' : ''}`}
               onClick={onToggleIntersections}
@@ -206,9 +278,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               <IntersectionIcon />
               <span>Intersections</span>
             </button>
-          </div>
+          )}
         </div>
-      )}
+      </div>
 
       <div style={styles.divider} />
 
@@ -219,7 +291,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           type="number"
           min="0.000001"
           step="any"
-          value={scaleInput}
+          value={scaleValue}
           onChange={e => setScaleInput(e.target.value)}
           onKeyDown={handleScaleKey}
           onBlur={applyScale}
@@ -236,56 +308,44 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <input
             type="checkbox"
             checked={gridSettings.enabled}
-            onChange={e => onGridSettingsChange({ ...gridSettings, enabled: e.target.checked })}
+            onChange={e => {
+              onGridSettingsChange({ ...gridSettings, enabled: e.target.checked });
+              // First enable usually means "configure it" — open the settings
+              if (e.target.checked) setShowGridPopover(true);
+            }}
             style={styles.gridCheckbox}
           />
           <span style={styles.scaleLabel}>Grid</span>
         </label>
         {gridSettings.enabled && (
-          <>
-            <span style={styles.scaleLabel}>W:</span>
-            <input
-              type="number" min="0" step="any"
-              value={gwX}
-              onChange={e => setGwX(e.target.value)}
-              onBlur={() => applyGridField('windowX', gwX)}
-              onKeyDown={e => { if (e.key === 'Enter') applyGridField('windowX', gwX); }}
-              style={styles.gridInput}
-              title="Window width (world units)"
-            />
-            <span style={styles.scaleLabel}>×</span>
-            <input
-              type="number" min="0" step="any"
-              value={gwY}
-              onChange={e => setGwY(e.target.value)}
-              onBlur={() => applyGridField('windowY', gwY)}
-              onKeyDown={e => { if (e.key === 'Enter') applyGridField('windowY', gwY); }}
-              style={styles.gridInput}
-              title="Window height (world units)"
-            />
-            <span style={styles.scaleLabel}>Step:</span>
-            <input
-              type="number" min="0" step="any"
-              value={gsX}
-              placeholder={gwX || '='}
-              onChange={e => setGsX(e.target.value)}
-              onBlur={() => applyGridField('stepX', gsX)}
-              onKeyDown={e => { if (e.key === 'Enter') applyGridField('stepX', gsX); }}
-              style={styles.gridInput}
-              title="Step X (default: same as window width)"
-            />
-            <span style={styles.scaleLabel}>×</span>
-            <input
-              type="number" min="0" step="any"
-              value={gsY}
-              placeholder={gwY || '='}
-              onChange={e => setGsY(e.target.value)}
-              onBlur={() => applyGridField('stepY', gsY)}
-              onKeyDown={e => { if (e.key === 'Enter') applyGridField('stepY', gsY); }}
-              style={styles.gridInput}
-              title="Step Y (default: same as window height)"
-            />
-          </>
+          <div style={styles.gridPopoverAnchor} ref={gridPopoverRef}>
+            <button
+              className={`toolbar-icon-btn ${showGridPopover ? 'active' : ''}`}
+              onClick={() => setShowGridPopover(prev => !prev)}
+              title="Grid settings"
+            >
+              <GearIcon />
+            </button>
+            {showGridPopover && (
+              <div style={styles.gridPopover}>
+                <div style={styles.gridPopoverRow}>
+                  <span style={styles.gridPopoverLabel}>Window</span>
+                  {gridField('windowX', gwX, setGwX, '', 'Window width (world units)')}
+                  <span style={styles.scaleLabel}>×</span>
+                  {gridField('windowY', gwY, setGwY, '', 'Window height (world units)')}
+                </div>
+                <div style={styles.gridPopoverRow}>
+                  <span style={styles.gridPopoverLabel}>Step</span>
+                  {gridField('stepX', gsX, setGsX, gwX || '=', 'Step X (default: same as window width)')}
+                  <span style={styles.scaleLabel}>×</span>
+                  {gridField('stepY', gsY, setGsY, gwY || '=', 'Step Y (default: same as window height)')}
+                </div>
+                <div style={styles.gridPopoverHint}>
+                  Empty step = windows are adjacent
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -293,7 +353,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
       {/* Import / Export */}
       <div style={styles.toolGroup}>
-        <span style={styles.groupLabel}>File</span>
         <div style={styles.buttonGroup}>
           <button
             className="toolbar-btn"
@@ -326,6 +385,19 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
       {/* Status / Hints */}
       <div style={styles.statusArea}>
+        {showIntersections && !isComputingIntersections && intersectionCount !== null && (
+          <div
+            style={{
+              ...styles.unitsBadge,
+              ...(intersectionCount > 0 ? styles.intersectionsHot : styles.intersectionsClean),
+            }}
+            title="Point crossings and collinear overlaps between visible shapes"
+          >
+            {intersectionCount > 0
+              ? `${intersectionCount} intersection${intersectionCount === 1 ? '' : 's'}`
+              : 'No intersections'}
+          </div>
+        )}
         {unitsDisplay && (
           <div
             style={styles.unitsBadge}
@@ -338,8 +410,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <div style={styles.hint}>
             <div style={styles.hintDot} />
             <span>
-              Click to add points • Press <kbd>Esc</kbd> to finish
-              {drawingMode === 'contour' && ' (auto-close)'}
+              Click to add points • <kbd>Esc</kbd> finishes{drawingMode === 'contour' && ' (auto-close)'} • <kbd>Esc</kbd> again exits
             </span>
           </div>
         )}
@@ -374,84 +445,30 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontWeight: tokens.typography.fontWeight.semibold,
     color: tokens.colors.text.primary,
     letterSpacing: '-0.02em',
+    whiteSpace: 'nowrap' as const,
   },
   divider: {
     width: '1px',
     height: '16px',
     backgroundColor: tokens.colors.border.subtle,
     margin: '0 4px',
+    flexShrink: 0,
   },
   toolGroup: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacing.xs,
   },
-  groupLabel: {
-    display: 'none',
-  },
   buttonGroup: {
     display: 'flex',
     gap: tokens.spacing.xs,
-  },
-  button: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '4px',
-    padding: '4px 8px',
-    height: tokens.components.button.height.md,
-    backgroundColor: 'transparent',
-    border: `1px solid ${tokens.colors.border.default}`,
-    borderRadius: '4px',
-    color: tokens.colors.text.secondary,
-    fontSize: '11px',
-    fontWeight: tokens.typography.fontWeight.medium,
-    fontFamily: 'inherit',
-    cursor: 'pointer',
-    transition: `all ${tokens.transitions.normal}`,
-    outline: 'none',
-  },
-  iconButton: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: tokens.components.button.height.md,
-    height: tokens.components.button.height.md,
-    backgroundColor: 'transparent',
-    border: `1px solid ${tokens.colors.border.default}`,
-    borderRadius: '4px',
-    color: tokens.colors.text.secondary,
-    cursor: 'pointer',
-    transition: `all ${tokens.transitions.normal}`,
-    outline: 'none',
-  },
-  buttonActive: {
-    backgroundColor: tokens.colors.accent.primary,
-    borderColor: tokens.colors.accent.primary,
-    color: tokens.colors.text.primary,
-    boxShadow: tokens.shadows.glow.primary,
-  },
-  buttonActiveContour: {
-    backgroundColor: tokens.colors.accent.success,
-    borderColor: tokens.colors.accent.success,
-    color: tokens.colors.text.primary,
-    boxShadow: tokens.shadows.glow.success,
-  },
-  buttonActiveIntersections: {
-    backgroundColor: '#ff0000',
-    borderColor: '#ff0000',
-    color: '#ffffff',
-    boxShadow: '0 0 12px rgba(255, 0, 0, 0.4)',
-  },
-  buttonDisabled: {
-    opacity: 0.35,
-    cursor: 'not-allowed',
-    pointerEvents: 'none' as const,
   },
   statusArea: {
     marginLeft: 'auto',
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacing.sm,
+    minWidth: 0,
   },
   unitsBadge: {
     padding: `${tokens.spacing.sm} ${tokens.spacing.md}`,
@@ -463,6 +480,16 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: tokens.colors.text.secondary,
     whiteSpace: 'nowrap' as const,
   },
+  intersectionsHot: {
+    color: '#ff6b6b',
+    borderColor: 'rgba(255, 0, 0, 0.35)',
+    backgroundColor: 'rgba(255, 0, 0, 0.08)',
+  },
+  intersectionsClean: {
+    color: tokens.colors.accent.success,
+    borderColor: 'rgba(0, 186, 124, 0.35)',
+    backgroundColor: 'rgba(0, 186, 124, 0.08)',
+  },
   hint: {
     display: 'flex',
     alignItems: 'center',
@@ -472,6 +499,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: tokens.radius.md,
     fontSize: tokens.typography.fontSize.sm,
     color: tokens.colors.text.secondary,
+    whiteSpace: 'nowrap' as const,
   },
   hintDot: {
     width: '6px',
@@ -479,6 +507,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: '50%',
     backgroundColor: tokens.colors.accent.danger,
     animation: 'pulse 2s infinite',
+    flexShrink: 0,
   },
   scaleLabel: {
     fontSize: tokens.typography.fontSize.sm,
@@ -510,6 +539,41 @@ const styles: { [key: string]: React.CSSProperties } = {
     accentColor: tokens.colors.accent.primary,
     cursor: 'pointer',
     flexShrink: 0,
+  },
+  gridPopoverAnchor: {
+    position: 'relative',
+    display: 'flex',
+    alignItems: 'center',
+  },
+  gridPopover: {
+    position: 'absolute',
+    top: 'calc(100% + 10px)',
+    left: '-8px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacing.sm,
+    padding: tokens.spacing.md,
+    backgroundColor: tokens.colors.bg.elevated,
+    border: `1px solid ${tokens.colors.border.default}`,
+    borderRadius: tokens.radius.md,
+    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5)',
+    zIndex: 500,
+  },
+  gridPopoverRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacing.xs,
+  },
+  gridPopoverLabel: {
+    width: '52px',
+    fontSize: tokens.typography.fontSize.sm,
+    color: tokens.colors.text.secondary,
+    flexShrink: 0,
+  },
+  gridPopoverHint: {
+    fontSize: tokens.typography.fontSize.xs,
+    color: tokens.colors.text.tertiary,
+    whiteSpace: 'nowrap' as const,
   },
   gridInput: {
     width: '64px',

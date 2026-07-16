@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo, useImperativeHandle } from 'react';
 import type { Shape } from '../models';
 import { Point, ShapeType } from '../models';
 import { IntersectionDetector, IntersectionType, SpatialIndex } from '../services';
@@ -31,15 +31,24 @@ const canvasColors = {
   intersectionGlow: 'rgba(255, 0, 0, 0.25)',
 };
 
+/** Imperative surface exposed to the app (view commands, not state) */
+export interface CanvasHandle {
+  /** Fit the view to the given shapes; defaults to the current shapes prop */
+  fitView: (shapesToFit?: Shape[]) => void;
+}
+
 interface CanvasProps {
   shapes: Shape[];
+  selectedShapeIds?: string[];
   onAddPoint?: (point: Point) => void;
   drawingMode: 'chain' | 'contour' | null;
   tempPoints: Point[];
   showIntersections?: boolean;
   showStats?: boolean;
   onIntersectionComputingChange?: (isComputing: boolean) => void;
+  onIntersectionsFound?: (count: number) => void;
   gridSettings?: GridSettings;
+  ref?: React.Ref<CanvasHandle>;
 }
 
 interface ViewTransform {
@@ -65,21 +74,49 @@ const layerStyle: React.CSSProperties = {
 // Size of the pre-rendered intersection point marker sprite (CSS px)
 const INTERSECTION_SPRITE_SIZE = 32;
 
+// Maximum zoom-in factor (px per world unit); zoom-out is not limited
+const MAX_SCALE = 1e8;
+
+// Stable default so the selection Set is not rebuilt on every render
+const NO_SELECTION: string[] = [];
+
+/**
+ * True when the two lists describe the same geometry: identical shape ids,
+ * point arrays (by reference) and visibility. Color / layer / selection
+ * changes keep the point arrays intact, so this cheaply distinguishes
+ * "geometry changed" from "only styling changed".
+ */
+function sameGeometry(a: Shape[], b: Shape[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || a[i].points !== b[i].points || a[i].visible !== b[i].visible) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export const Canvas: React.FC<CanvasProps> = ({
   shapes,
+  selectedShapeIds = NO_SELECTION,
   onAddPoint,
   drawingMode,
   tempPoints,
   showIntersections = false,
   showStats = false,
   onIntersectionComputingChange,
+  onIntersectionsFound,
   gridSettings,
+  ref,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const gridCanvasRef = useRef<HTMLCanvasElement>(null);
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<WebGLRenderer | null>(null);
+  const coordsRef = useRef<HTMLSpanElement>(null);
+  const zoomRef = useRef<HTMLSpanElement>(null);
 
   const [transform, setTransform] = useState<ViewTransform>({
     offsetX: 0,
@@ -88,9 +125,12 @@ export const Canvas: React.FC<CanvasProps> = ({
   });
   const [size, setSize] = useState<CanvasSize>({ width: 0, height: 0, dpr: 1 });
   const [isPanning, setIsPanning] = useState(false);
+  const [glError, setGlError] = useState<string | null>(null);
   const lastMousePosRef = useRef<{ x: number; y: number } | null>(null);
   const [mouseWorldPos, setMouseWorldPos] = useState<Point | null>(null);
   const [intersections, setIntersections] = useState<IntersectionResult[]>([]);
+
+  const selectedSet = useMemo(() => new Set(selectedShapeIds), [selectedShapeIds]);
 
   // Spatial index for viewport queries (vertex markers, hit-testing)
   const spatialIndexRef = useRef<SpatialIndex>(new SpatialIndex());
@@ -114,24 +154,28 @@ export const Canvas: React.FC<CanvasProps> = ({
     return () => observer.disconnect();
   }, []);
 
-  // Initialize the WebGL renderer
-  useEffect(() => {
-    const canvas = glCanvasRef.current;
-    if (!canvas) return;
+  // Initialize the WebGL renderer as soon as the canvas element attaches.
+  // A callback ref (rather than an effect) ties the renderer's lifetime
+  // directly to the DOM node.
+  const setupGlCanvas = useCallback((canvas: HTMLCanvasElement | null) => {
+    if (!canvas) {
+      rendererRef.current?.dispose();
+      rendererRef.current = null;
+      glCanvasRef.current = null;
+      return;
+    }
 
+    glCanvasRef.current = canvas;
     try {
       rendererRef.current = new WebGLRenderer(canvas);
     } catch (error) {
       console.error('Failed to initialize WebGL renderer:', error);
+      setGlError('WebGL2 is not available in this browser — shape geometry cannot be rendered.');
     }
-
-    return () => {
-      rendererRef.current?.dispose();
-      rendererRef.current = null;
-    };
   }, []);
 
-  // Rebuild geometry when shapes change
+  // Rebuild geometry when shapes change (selection is not part of `shapes`,
+  // so selecting never re-uploads GPU buffers or reindexes)
   useEffect(() => {
     spatialIndexRef.current.buildIndex(shapes);
     rendererRef.current?.setShapes(shapes);
@@ -413,7 +457,11 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [worldToScreen]);
 
   // Draw vertex markers for non-selected shapes when zoomed in
-  const drawPointMarkers = useCallback((ctx: CanvasRenderingContext2D, shapesInView: Shape[]) => {
+  const drawPointMarkers = useCallback((
+    ctx: CanvasRenderingContext2D,
+    shapesInView: Shape[],
+    selected: Set<string>
+  ) => {
     if (transform.scale <= 1.0) return;
 
     // Skip some markers at moderate zoom so they don't turn into noise
@@ -421,7 +469,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     const drawInnerHighlight = transform.scale > 2.0;
 
     for (const shape of shapesInView) {
-      if (!shape.visible || shape.selected) continue;
+      if (!shape.visible || selected.has(shape.id)) continue;
 
       ctx.fillStyle = shape.color;
       shape.points.forEach((point, index) => {
@@ -440,7 +488,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (drawInnerHighlight) {
       ctx.fillStyle = canvasColors.point;
       for (const shape of shapesInView) {
-        if (!shape.visible || shape.selected) continue;
+        if (!shape.visible || selected.has(shape.id)) continue;
 
         shape.points.forEach((point, index) => {
           if (pointSkip > 1 && index % pointSkip !== 0 &&
@@ -670,39 +718,48 @@ export const Canvas: React.FC<CanvasProps> = ({
     ctx.fillText(statsText, x, y);
   }, [size.height]);
 
-  // Handle mouse wheel for zooming
+  // Handle mouse wheel for zooming. Functional update so rapid wheel events
+  // between renders each apply to the latest transform (no lost zoom steps).
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
 
-    // Zoom factor
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-    const newScale = transform.scale * zoomFactor;
 
-    // Clamp scale - generous limits to allow zooming into small coordinates
-    const clampedScale = Math.min(1e8, newScale);
+    setTransform(prev => {
+      // Clamp scale - generous limits to allow zooming into small coordinates
+      const clampedScale = Math.min(MAX_SCALE, prev.scale * zoomFactor);
 
-    // Zoom relative to screen center: keep the world point at the screen
-    // center fixed while changing scale
-    const worldCenterX = -transform.offsetX / transform.scale;
-    const worldCenterY = transform.offsetY / transform.scale;
+      // Zoom relative to screen center: keep the world point at the screen
+      // center fixed while changing scale
+      const worldCenterX = -prev.offsetX / prev.scale;
+      const worldCenterY = prev.offsetY / prev.scale;
 
-    setTransform({
-      offsetX: -worldCenterX * clampedScale,
-      offsetY: worldCenterY * clampedScale,
-      scale: clampedScale
+      return {
+        offsetX: -worldCenterX * clampedScale,
+        offsetY: worldCenterY * clampedScale,
+        scale: clampedScale
+      };
     });
-  }, [transform]);
+  }, []);
 
   // Handle mouse move
   const handleMouseMove = useCallback((e: MouseEvent) => {
     const mouseX = e.clientX;
     const mouseY = e.clientY;
 
-    // World position is only needed by drawing-mode overlays (crosshair and
-    // rubber-band line); tracking it outside drawing mode would redraw the
+    const world = screenToWorld(mouseX, mouseY);
+
+    // Status bar readout is written imperatively — no React state, so idle
+    // mouse movement does not re-render anything
+    if (coordsRef.current) {
+      coordsRef.current.textContent = `${world.x.toFixed(2)}, ${world.y.toFixed(2)}`;
+    }
+
+    // World position state is only needed by drawing-mode overlays (crosshair
+    // and rubber-band line); tracking it outside drawing mode would redraw the
     // overlay on every mouse move
     if (drawingMode) {
-      setMouseWorldPos(screenToWorld(mouseX, mouseY));
+      setMouseWorldPos(world);
     }
 
     // Handle panning
@@ -721,13 +778,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     lastMousePosRef.current = { x: mouseX, y: mouseY };
   }, [isPanning, drawingMode, screenToWorld]);
 
-  // Drop the stale cursor position when leaving drawing mode
-  useEffect(() => {
-    if (!drawingMode) {
-      setMouseWorldPos(null);
-    }
-  }, [drawingMode]);
-
   // Handle mouse down
   const handleMouseDown = useCallback((e: MouseEvent) => {
     if (e.button === 1 || (e.button === 0 && e.altKey)) {
@@ -738,6 +788,10 @@ export const Canvas: React.FC<CanvasProps> = ({
       // Left click for adding points
       const worldPos = screenToWorld(e.clientX, e.clientY);
       onAddPoint(worldPos);
+    } else if (e.button === 0 && !drawingMode) {
+      // Plain left drag pans when no drawing tool is active
+      setIsPanning(true);
+      e.preventDefault();
     }
   }, [drawingMode, onAddPoint, screenToWorld]);
 
@@ -753,7 +807,13 @@ export const Canvas: React.FC<CanvasProps> = ({
     const container = containerRef.current;
     if (!container) return;
 
-    const handleMouseLeave = () => setIsPanning(false);
+    const handleMouseLeave = () => {
+      setIsPanning(false);
+      // The cursor is gone: drop the crosshair position so re-entering
+      // drawing mode later does not flash it at a stale location
+      setMouseWorldPos(null);
+      if (coordsRef.current) coordsRef.current.textContent = '—';
+    };
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     container.addEventListener('mousedown', handleMouseDown);
@@ -770,40 +830,94 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
   }, [handleWheel, handleMouseDown, handleMouseMove, handleMouseUp]);
 
-  // Compute intersections when shapes or visibility changes
-  useEffect(() => {
-    let isCancelled = false;
+  // Fit the view to the shape extents (import, toolbar button, Home key).
+  // Exposed imperatively: fitting is a one-off view command, not derived state.
+  const fitView = useCallback((shapesToFit?: Shape[]) => {
+    if (size.width === 0 || size.height === 0) return;
 
-    const computeIntersections = async () => {
-      if (showIntersections) {
-        onIntersectionComputingChange?.(true);
-        try {
-          const intersections = await IntersectionDetector.findAllIntersections(shapes);
-          if (!isCancelled) {
-            setIntersections(intersections);
-          }
-        } catch (error) {
-          console.error('Error computing intersections:', error);
-          if (!isCancelled) {
-            setIntersections([]);
-          }
-        } finally {
-          if (!isCancelled) {
-            onIntersectionComputingChange?.(false);
-          }
-        }
+    const list = shapesToFit ?? shapes;
+    const withPoints = list.filter(s => s.points.length > 0);
+    const target = withPoints.some(s => s.visible)
+      ? withPoints.filter(s => s.visible)
+      : withPoints;
+    if (target.length === 0) return;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const shape of target) {
+      for (const p of shape.points) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+
+    const w = maxX - minX;
+    const h = maxY - minY;
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const margin = 0.9; // leave 10% breathing room around the extents
+
+    setTransform(prev => {
+      let scale: number;
+      if (w <= 0 && h <= 0) {
+        scale = prev.scale; // single point: keep zoom, just center it
       } else {
+        scale = margin * Math.min(
+          w > 0 ? size.width / w : Infinity,
+          h > 0 ? size.height / h : Infinity
+        );
+      }
+      if (!Number.isFinite(scale) || scale <= 0) scale = prev.scale;
+      scale = Math.min(MAX_SCALE, scale);
+
+      return { offsetX: -cx * scale, offsetY: cy * scale, scale };
+    });
+  }, [shapes, size]);
+
+  useImperativeHandle(ref, () => ({ fitView }), [fitView]);
+
+  // Compute intersections while they are shown and the geometry has changed.
+  // Styling-only updates (color, layer assignment) are filtered out with
+  // sameGeometry so they neither restart the worker nor cancel an in-flight
+  // computation. Results stay warm while hidden: re-showing an unchanged
+  // scene displays them instantly without recomputing.
+  const intersectionRunRef = useRef(0);
+  const lastComputedShapesRef = useRef<Shape[] | null>(null);
+  useEffect(() => {
+    if (!showIntersections) return;
+
+    const last = lastComputedShapesRef.current;
+    if (last && sameGeometry(last, shapes)) return;
+    lastComputedShapesRef.current = shapes;
+
+    const runId = ++intersectionRunRef.current;
+    const isCurrent = () => intersectionRunRef.current === runId;
+
+    onIntersectionComputingChange?.(true);
+    IntersectionDetector.findAllIntersections(shapes)
+      .then(results => {
+        if (!isCurrent()) return;
+        setIntersections(results);
+        onIntersectionsFound?.(results.length);
+        onIntersectionComputingChange?.(false);
+      })
+      .catch(error => {
+        if (!isCurrent()) return; // superseded request — not an error
+        console.error('Error computing intersections:', error);
+        lastComputedShapesRef.current = null; // allow a retry on the next change
         setIntersections([]);
         onIntersectionComputingChange?.(false);
-      }
-    };
+      });
+  }, [shapes, showIntersections, onIntersectionComputingChange, onIntersectionsFound]);
 
-    computeIntersections();
-
+  // Invalidate any in-flight intersection run on unmount
+  useEffect(() => {
+    const runRef = intersectionRunRef;
     return () => {
-      isCancelled = true;
+      runRef.current++;
     };
-  }, [shapes, showIntersections, onIntersectionComputingChange]);
+  }, []);
 
   // Render the WebGL geometry layer (only on data / view / size changes)
   useEffect(() => {
@@ -834,6 +948,13 @@ export const Canvas: React.FC<CanvasProps> = ({
     drawUserGrid(ctx);
   }, [size, setup2dContext, drawGrid, drawUserGrid]);
 
+  // Keep the status bar zoom readout in sync (imperative, out of React state)
+  useEffect(() => {
+    if (zoomRef.current) {
+      zoomRef.current.textContent = `${Number(transform.scale.toPrecision(3))}×`;
+    }
+  }, [transform.scale]);
+
   // Render the interactive overlay: selection, vertex markers, intersections,
   // temp shape, cursor, stats. Redraws on mouse move without touching the
   // geometry layer.
@@ -850,14 +971,16 @@ export const Canvas: React.FC<CanvasProps> = ({
     const shapesInView = spatialIndexRef.current.queryViewport(getViewportBounds(), 0, transform.scale);
 
     // Selected shape highlights
-    for (const shape of shapesInView) {
-      if (shape.visible && shape.selected) {
-        drawSelectedShape(ctx, shape);
+    if (selectedSet.size > 0) {
+      for (const shape of shapesInView) {
+        if (shape.visible && selectedSet.has(shape.id)) {
+          drawSelectedShape(ctx, shape);
+        }
       }
     }
 
     // Vertex markers when zoomed in
-    drawPointMarkers(ctx, shapesInView);
+    drawPointMarkers(ctx, shapesInView, selectedSet);
 
     // Intersections if enabled
     if (showIntersections && intersections.length > 0) {
@@ -879,7 +1002,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       const totalShapes = shapes.filter(s => s.visible).length;
       drawStats(ctx, totalShapes, transform.scale);
     }
-  }, [shapes, transform, size, setup2dContext, getViewportBounds, drawSelectedShape,
+  }, [shapes, selectedSet, transform, size, setup2dContext, getViewportBounds, drawSelectedShape,
       drawPointMarkers, drawIntersections, drawTempShape, drawCursor, drawStats,
       tempPoints, drawingMode, mouseWorldPos, showIntersections, intersections, showStats]);
 
@@ -891,12 +1014,20 @@ export const Canvas: React.FC<CanvasProps> = ({
         width: '100%',
         height: '100%',
         overflow: 'hidden',
-        cursor: isPanning ? 'grabbing' : (drawingMode ? 'crosshair' : 'default')
+        cursor: isPanning ? 'grabbing' : (drawingMode ? 'crosshair' : 'grab')
       }}
     >
       <canvas ref={gridCanvasRef} style={layerStyle} />
-      <canvas ref={glCanvasRef} style={layerStyle} />
+      <canvas ref={setupGlCanvas} style={layerStyle} />
       <canvas ref={overlayCanvasRef} style={layerStyle} />
+      {glError && (
+        <div className="canvas-error-banner">{glError}</div>
+      )}
+      <div className="canvas-statusbar">
+        <span ref={coordsRef}>—</span>
+        <span className="canvas-statusbar-sep" />
+        <span ref={zoomRef}>1×</span>
+      </div>
     </div>
   );
 };

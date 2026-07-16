@@ -368,6 +368,19 @@ kbd {
   pointer-events: none;
 }
 
+.toolbar-icon-btn.active {
+  background-color: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+  box-shadow: 0 0 12px rgba(29, 155, 240, 0.4);
+}
+
+/* Pulsing dot used by the drawing-mode hint in the toolbar */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 /* Action buttons in panels */
 .action-btn {
   display: flex;
@@ -405,15 +418,17 @@ kbd {
 
 /* ========================================
    Layer Panel Buttons
+   (!important: the base look of these buttons is set with inline styles,
+   which would otherwise always win over the :hover rules)
    ======================================== */
 .layer-icon-btn:hover {
-  background-color: var(--bg-elevated);
-  color: var(--text-primary);
+  background-color: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
 }
 
 .layer-delete-btn:hover {
-  background-color: rgba(244, 33, 46, 0.15);
-  color: var(--accent-danger);
+  background-color: rgba(244, 33, 46, 0.15) !important;
+  color: var(--accent-danger) !important;
 }
 
 .layer-color-btn:hover {
@@ -421,7 +436,7 @@ kbd {
 }
 
 .dropdown-item:hover {
-  background-color: var(--bg-tertiary);
+  background-color: var(--bg-tertiary) !important;
 }
 
 .shape-item:hover {
@@ -429,22 +444,94 @@ kbd {
 }
 
 .add-button:hover {
-  background-color: var(--bg-elevated);
-  border-color: var(--border-strong);
-  color: var(--text-primary);
+  background-color: var(--bg-elevated) !important;
+  border-color: var(--border-strong) !important;
+  color: var(--text-primary) !important;
 }
 
 .create-button:hover {
-  background-color: var(--accent-info-bg);
+  background-color: var(--accent-info-bg) !important;
 }
 
 .assign-here-btn:hover {
-  background-color: var(--accent-info-bg);
-  border-style: solid;
+  background-color: var(--accent-info-bg) !important;
+  border-style: solid !important;
 }
 
 .select-all-btn:hover {
   text-decoration: underline;
+}
+
+/* ========================================
+   Objects Panel Items
+   ======================================== */
+.object-item {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 8px 12px;
+  margin-bottom: 4px; /* row pitch = 48px, must match ITEM_HEIGHT in ObjectsPanel */
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  outline: none;
+}
+
+.object-item:hover {
+  background-color: var(--bg-elevated);
+  border-color: var(--border-default);
+}
+
+.object-item.selected {
+  background-color: var(--bg-elevated);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary);
+}
+
+/* ========================================
+   Canvas Overlays (status bar, error banner)
+   ======================================== */
+.canvas-statusbar {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background-color: rgba(10, 14, 19, 0.8);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  pointer-events: none;
+  user-select: none;
+  z-index: 10;
+}
+
+.canvas-statusbar-sep {
+  width: 1px;
+  height: 12px;
+  background-color: var(--border-default);
+}
+
+.canvas-error-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 80%;
+  padding: 8px 16px;
+  background-color: rgba(244, 33, 46, 0.12);
+  border: 1px solid rgba(244, 33, 46, 0.45);
+  border-radius: var(--radius-md);
+  color: #ff8a92;
+  font-size: var(--font-size-sm);
+  text-align: center;
+  z-index: 50;
 }
 
 /* ========================================

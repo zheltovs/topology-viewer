@@ -16,7 +16,6 @@ export interface Shape {
   points: Point[];
   name: string;
   visible: boolean;
-  selected: boolean;
   color: string;
   layerId?: string;
 }
@@ -29,7 +28,6 @@ export class Chain implements Shape {
   type: ShapeType = ShapeType.CHAIN as ShapeType;
   name: string;
   visible: boolean = true;
-  selected: boolean = false;
   color: string = '#1d9bf0';
   points: Point[];
   layerId?: string;
@@ -57,7 +55,6 @@ export class Chain implements Shape {
     const clonedPoints = this.points.map(p => p.clone());
     const chain = new Chain(clonedPoints, this.name, this.color, this.layerId);
     chain.visible = this.visible;
-    chain.selected = this.selected;
     return chain;
   }
 }
@@ -70,7 +67,6 @@ export class Contour implements Shape {
   type: ShapeType = ShapeType.CONTOUR as ShapeType;
   name: string;
   visible: boolean = true;
-  selected: boolean = false;
   color: string = '#00ba7c';
   points: Point[];
   layerId?: string;
@@ -123,7 +119,6 @@ export class Contour implements Shape {
     const clonedPoints = this.points.map(p => p.clone());
     const contour = new Contour(clonedPoints, this.name, this.color, this.layerId);
     contour.visible = this.visible;
-    contour.selected = this.selected;
     return contour;
   }
 }
